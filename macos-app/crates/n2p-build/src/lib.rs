@@ -24,6 +24,9 @@
 pub mod diagnostics;
 pub mod fonts;
 pub mod fontsize;
+mod protection;
+
+pub use protection::{PreservationReason, PreservedText};
 
 use diagnostics::{DiagnosticSink, EraseDiagnostic, PageDiagnostics, TextDiagnostic, bbox_array};
 
@@ -228,6 +231,7 @@ pub struct PageReport {
     pub text_boxes: usize,
     pub skipped_text: usize,
     pub pictures: usize,
+    pub preserved_text: Vec<PreservedText>,
 }
 
 /// 整體建置結果。
@@ -357,7 +361,25 @@ fn build_page(
     }
     let scale = slide_width_pt / layout.size_pt.0;
 
-    let mut report = PageReport::default();
+    let plan = protection::plan(layout, input.image, scale);
+    let mut report = PageReport {
+        skipped_text: plan
+            .preserved
+            .iter()
+            .filter(|region| !region.text.is_empty())
+            .count(),
+        preserved_text: plan.preserved.clone(),
+        ..Default::default()
+    };
+    if let Some(diagnostics) = &mut diagnostics {
+        diagnostics.report.preserved_text = plan.preserved.clone();
+        diagnostics.report.protected_boxes_pt = plan
+            .protected_boxes
+            .iter()
+            .copied()
+            .map(bbox_array)
+            .collect();
+    }
     let image_scale = input.image.width as f64 / layout.size_pt.0;
 
     // ── 1. 文字框 ──────────────────────────────────────────────────────────
@@ -366,42 +388,44 @@ fn build_page(
     // 沒轉成文字框的區塊（例如只有一個 `◎` 的子彈點）必須留在背景上，
     // 擦掉就等於把原稿的圖示刪了。
     let mut erase_regions: Vec<EraseRegion> = Vec::new();
-    for (block_index, block) in layout.text_blocks().enumerate() {
+    for (block_index, planned) in plan.editable.iter().enumerate() {
+        let block = &planned.block;
         // 先用幾何判斷把左側的項目符號／小圖示從 bbox 排除，再拿「純文字 bbox」
         // 去算字級、置中與擦除。少了這一步，bbox 含子彈點會讓字級偏大、
         // 文字置中後壓到子彈點上。傾斜文字不走水平投影裁切。
-        let text_region = if block.rotation_mdeg.abs() >= 3_000 {
+        let text_region = if planned.bounded || block.rotation_mdeg.abs() >= 3_000 {
             block.bbox
         } else {
             trim_block_icon(input.image, block.bbox, image_scale, &block.text)
         };
 
-        // 短小的非中文區塊若壓在圖形上，通常是 Vision 把裝飾讀成文字
-        // （第 3 頁的引號裝飾被讀成 "99"）。這種區塊留給背景，不要重複畫一次。
-        let decoration = is_decoration_block(input.image, text_region, image_scale, &block.text);
         if let Some(diagnostics) = &mut diagnostics {
             diagnostics.report.text_blocks.push(TextDiagnostic {
                 block_index,
+                source_block_index: planned.source_block_index,
+                source_line_indices: planned.source_line_indices.clone(),
+                confidence_milli: block
+                    .lines
+                    .iter()
+                    .map(|line| line.confidence_milli)
+                    .collect(),
+                natural_font_size_pt: natural_font_size(block, scale),
                 text: block.text.clone(),
                 bbox_pt: bbox_array(block.bbox),
                 text_region_pt: bbox_array(text_region),
                 line_boxes_pt: block.lines.iter().map(|l| l.bbox.map(bbox_array)).collect(),
                 rotation_mdeg: block.rotation_mdeg,
-                decision: if decoration {
-                    "preserve-decoration"
-                } else {
-                    "skip-empty-or-watermark"
-                },
+                decision: "skip-empty-or-watermark",
                 color: None,
                 density: None,
             });
         }
-        if decoration {
-            report.skipped_text += 1;
-            continue;
-        }
         // 文字區域分析：Otsu ∪ 自適應求筆畫遮罩，同時取得文字色與字重。
-        let em_px = estimate_font_size(block, scale) / scale.max(f64::EPSILON) * image_scale;
+        let em_px = planned
+            .font_size_pt
+            .unwrap_or_else(|| estimate_font_size(block, scale))
+            / scale.max(f64::EPSILON)
+            * image_scale;
         let analysis = n2p_image::textmask::analyze_with_line_height(
             input.image,
             text_region.scale(image_scale),
@@ -422,6 +446,8 @@ fn build_page(
             east_asian_font,
             text_autofit: options.text_autofit,
             text_mode: options.text_mode,
+            font_size_pt: planned.font_size_pt,
+            bounded: planned.bounded,
         };
         let Some(text_box) = text_box_for(block, text_region, &env, text_color) else {
             report.skipped_text += 1;
@@ -523,7 +549,13 @@ fn build_page(
     }
 
     // ── 3. 背景 ────────────────────────────────────────────────────────────
-    let (background, objects) = prepare_background(input, options, &erase_regions, diagnostics)?;
+    let (background, objects) = prepare_background(
+        input,
+        options,
+        &erase_regions,
+        &plan.protected_boxes,
+        diagnostics,
+    )?;
     deck.set_background_picture(index, background, "png")
         .map_err(Error::Ooxml)?;
     // 物件置底（在文字之下、背景之上）。
@@ -558,6 +590,8 @@ struct TextEnv<'a> {
     east_asian_font: Option<&'a str>,
     text_autofit: bool,
     text_mode: TextMode,
+    font_size_pt: Option<f64>,
+    bounded: bool,
 }
 
 fn text_box_for(
@@ -574,6 +608,8 @@ fn text_box_for(
         east_asian_font,
         text_autofit,
         text_mode,
+        font_size_pt,
+        bounded,
     } = *env;
     if should_skip(block) {
         return None;
@@ -584,11 +620,13 @@ fn text_box_for(
     let bx2 = region.right as f64;
     let by2 = region.bottom as f64;
 
-    let font_size_pt = estimate_font_size(block, scale);
+    let font_size_pt = font_size_pt.unwrap_or_else(|| estimate_font_size(block, scale));
 
     let is_rotated = block.rotation_mdeg.abs() >= 3_000;
     let is_title = block.kind == BlockKind::ParagraphTitle;
-    let (alignment, h_padding) = if is_rotated {
+    let (alignment, h_padding) = if bounded {
+        (Align::Left, 0.0)
+    } else if is_rotated {
         (Align::Center, H_PADDING_BODY_PT)
     } else if is_title {
         (Align::Left, H_PADDING_TITLE_PT)
@@ -696,6 +734,16 @@ fn text_box_for(
         (rect.right_pt + cover_padding_pt).min(slide_width_pt),
         (rect.bottom_pt + cover_padding_pt).min(slide_height_pt),
     );
+    let rect = if bounded {
+        Rect::ltrb(
+            left.max(0.0),
+            rect.top_pt,
+            right.min(slide_width_pt),
+            rect.bottom_pt,
+        )
+    } else {
+        rect
+    };
 
     let mut text_box = TextBox::new(
         format!("Block_{}", block.kind.label()),
@@ -710,7 +758,7 @@ fn text_box_for(
     if let Some(ea) = east_asian_font {
         text_box = text_box.east_asian_font(ea);
     }
-    if text_autofit {
+    if text_autofit || bounded {
         text_box = text_box.autofit(AutoFit::Normal);
     }
     if is_rotated {
@@ -852,6 +900,14 @@ fn should_skip(block: &Block) -> bool {
 ///
 /// 舊版用 `bbox高度 × 0.75`，對 Vision 的貼齊墨跡框會系統性偏小 30% 以上。
 fn estimate_font_size(block: &Block, scale: f64) -> f64 {
+    estimate_font_size_at_least(block, scale, MIN_FONT_SIZE_PT).round()
+}
+
+fn natural_font_size(block: &Block, scale: f64) -> f64 {
+    estimate_font_size_at_least(block, scale, 0.5)
+}
+
+fn estimate_font_size_at_least(block: &Block, scale: f64, minimum: f64) -> f64 {
     // 行距
     let by_pitch = line_pitch_pt(block)
         .map(|pitch| pitch * scale)
@@ -909,8 +965,7 @@ fn estimate_font_size(block: &Block, scale: f64) -> f64 {
 
     let em = em
         .unwrap_or(MIN_FONT_SIZE_PT)
-        .clamp(MIN_FONT_SIZE_PT, MAX_FONT_SIZE_PT)
-        .round();
+        .clamp(minimum, MAX_FONT_SIZE_PT);
     if std::env::var("N2P_DEBUG_FONT").is_ok() {
         eprintln!(
             "[font] {:?} bbox={:?} em={em} units={:.2} lineWidth={:?} pitch={:?} height={:?} text={:?}",
@@ -1165,13 +1220,16 @@ fn prepare_text_erasure(
     layout_width: f64,
     mode: EraseMode,
     regions: &[EraseRegion],
+    protected: &Mask,
 ) -> (Vec<PreparedTextErase>, Mask) {
-    let mut all_text = Mask::new(source.width, source.height);
+    let mut all_text = protected.clone();
+    let protected_bbox = protected.bbox();
     let scaled: Vec<(BBox, Mask, u32, &EraseRegion)> = regions
         .iter()
         .map(|region| {
             let mut mask = Mask::new(source.width, source.height);
             merge_scaled(&mut mask, &region.mask);
+            subtract_mask(&mut mask, protected, protected_bbox);
             merge_scaled(&mut all_text, &mask);
             let ratio = source.width as f64 / region.mask.width as f64;
             let radius = (region.expand_px as f64 * ratio).round() as u32;
@@ -1190,12 +1248,13 @@ fn prepare_text_erasure(
         .into_iter()
         .map(|(bbox, initial, radius, region)| {
             let background = n2p_image::text_inpaint::estimate_background(source, bbox, &all_text);
-            let mask = match (&background, mode) {
+            let mut mask = match (&background, mode) {
                 (Some(background), EraseMode::Lama) => n2p_image::text_inpaint::expand_mask(
                     source, &initial, &all_text, bbox, radius, background,
                 ),
                 _ => initial,
             };
+            subtract_mask(&mut mask, protected, protected_bbox);
             PreparedTextErase {
                 block_index: region.block_index,
                 line_index: region.line_index,
@@ -1217,6 +1276,7 @@ fn prepare_background(
     input: &PageInput<'_>,
     options: &BuildOptions,
     erase_regions: &[EraseRegion],
+    protected_boxes: &[BBox],
     mut diagnostics: Option<&mut PageDiagnostics>,
 ) -> Result<(Vec<u8>, Vec<ExtractedObject>)> {
     let _ = input.layout;
@@ -1263,11 +1323,23 @@ fn prepare_background(
     // 已擦字區域（以背景圖當下的尺寸記錄）。SAM 會把文字塗抹塊當成物件，
     // 用這張遮罩把它們濾掉。
     let mut erased_text = Mask::new(image.width, image.height);
+    let mut protected = Mask::new(image.width, image.height);
+    for bbox in protected_boxes {
+        mark_bbox(
+            &mut protected,
+            bbox.scale(image.width as f64 / layout.size_pt.0),
+        );
+    }
 
     if options.erase_background_regions && options.text_mode == TextMode::Erase {
         let source = image.clone();
-        let (regions, all_text) =
-            prepare_text_erasure(&source, layout.size_pt.0, options.erase_mode, erase_regions);
+        let (regions, all_text) = prepare_text_erasure(
+            &source,
+            layout.size_pt.0,
+            options.erase_mode,
+            erase_regions,
+            &protected,
+        );
         for PreparedTextErase {
             block_index,
             line_index,
@@ -1373,6 +1445,17 @@ fn prepare_background(
                 });
             }
         }
+        // 矩形消去モードも含め、画像に残すと決めた画素を確実に維持する。
+        if let Some(bbox) = protected.bbox() {
+            for y in bbox.top..bbox.bottom {
+                for x in bbox.left..bbox.right {
+                    if protected.get(x as u32, y as u32) {
+                        image.set_pixel(x as u32, y as u32, source.pixel(x as u32, y as u32));
+                    }
+                }
+            }
+        }
+        subtract_mask(&mut erased_text, &protected, protected.bbox());
     }
 
     let objects = if options.extract_objects
@@ -1383,13 +1466,16 @@ fn prepare_background(
         let grow = ((image.width as f64 * 0.003).round() as u32).max(2);
         erased_text.dilate(env_px("N2P_EXCLUDE_GROW", grow));
         let lama = engine_guard.as_mut().and_then(|guard| guard.as_mut());
-        extract_objects(&mut image, layout.size_pt.0, &erased_text, lama)?
+        let mut excluded_objects = erased_text.clone();
+        merge_scaled(&mut excluded_objects, &protected);
+        extract_objects(&mut image, layout.size_pt.0, &excluded_objects, lama)?
     } else {
         Vec::new()
     };
 
     if let Some(diagnostics) = diagnostics {
         diagnostics.erasure_mask = erased_text;
+        diagnostics.preserved_mask = protected;
         diagnostics.background = Some(image.clone());
     }
     let png = image.to_png().map_err(|e| Error::Image(e.to_string()))?;
@@ -1595,6 +1681,19 @@ fn merge_scaled(target: &mut Mask, source: &Mask) {
     }
 }
 
+fn subtract_mask(target: &mut Mask, excluded: &Mask, bbox: Option<BBox>) {
+    let Some(bbox) = bbox else {
+        return;
+    };
+    for y in bbox.top..bbox.bottom {
+        for x in bbox.left..bbox.right {
+            if excluded.get(x as u32, y as u32) {
+                target.set(x as u32, y as u32, false);
+            }
+        }
+    }
+}
+
 /// 8 鄰域內有遮罩像素。
 fn touches(mask: &Mask, x: u32, y: u32) -> bool {
     for dy in -1i64..=1 {
@@ -1665,6 +1764,7 @@ mod tests {
                             image_path: None,
                         }],
                         bbox: None,
+                        ..Default::default()
                     }],
                     rotation_mdeg: 0,
                 },
@@ -1678,6 +1778,7 @@ mod tests {
                             image_path: None,
                         }],
                         bbox: None,
+                        ..Default::default()
                     }],
                     rotation_mdeg: 0,
                 },
@@ -1725,7 +1826,7 @@ mod tests {
             expand_px: 8,
             flat_background: true,
         }];
-        let (png, _) = prepare_background(&input, &options, &regions, None).unwrap();
+        let (png, _) = prepare_background(&input, &options, &regions, &[], None).unwrap();
         let actual = RgbImage::from_png_bytes(&png).unwrap();
         for y in 0..background.height {
             for x in 0..background.width {
@@ -1787,6 +1888,7 @@ mod tests {
                 image_path: None,
             }],
             bbox: Some(BBox::new(660, 362, 740, 383)),
+            ..Default::default()
         }];
         let em = estimate_font_size(&block, 720.0 / 1376.0);
         assert!(
@@ -1806,6 +1908,7 @@ mod tests {
                 image_path: None,
             }],
             bbox: Some(BBox::new(0, 0, 336, 50)),
+            ..Default::default()
         }];
         let size = estimate_font_size(&block, 1.0);
         assert!((size - 42.0).abs() <= 1.0, "應約 42 pt，實際 {size}");
@@ -1823,6 +1926,7 @@ mod tests {
                     image_path: None,
                 }],
                 bbox: Some(BBox::new(0, i as i64 * 60, 150, i as i64 * 60 + 50)),
+                ..Default::default()
             })
             .collect();
         let size = estimate_font_size(&block, 1.0);
@@ -1840,6 +1944,7 @@ mod tests {
                     image_path: None,
                 }],
                 bbox: Some(BBox::new(left, i as i64 * 24, right, i as i64 * 24 + 20)),
+                ..Default::default()
             })
             .collect();
         block
@@ -1880,6 +1985,7 @@ mod tests {
                 image_path: None,
             }],
             bbox: Some(BBox::new(0, 0, 2, 2)),
+            ..Default::default()
         }];
         let size = estimate_font_size(&block, 1.0);
         assert!(size >= MIN_FONT_SIZE_PT, "實際 {size}");
@@ -2061,6 +2167,7 @@ mod tests {
                 image_path: None,
             }],
             bbox: Some(text_bbox),
+            ..Default::default()
         }];
         let layout = LayoutPage {
             size_pt: (400.0, 200.0),
@@ -2166,6 +2273,7 @@ mod tests {
                 image_path: None,
             }],
             bbox: Some(bullet.bbox),
+            ..Default::default()
         }];
         let mut body = Block::new(BlockKind::Text, BBox::new(200, 100, 380, 140));
         body.text = "差異的根源".into();
@@ -2175,6 +2283,7 @@ mod tests {
                 image_path: None,
             }],
             bbox: Some(body.bbox),
+            ..Default::default()
         }];
 
         let layout = LayoutPage {
@@ -2242,6 +2351,7 @@ mod tests {
                 image_path: None,
             }],
             bbox: Some(block.bbox),
+            ..Default::default()
         }];
         let layout = LayoutPage {
             size_pt: (400.0, 200.0),
@@ -2308,6 +2418,7 @@ mod tests {
                 image_path: None,
             }],
             bbox: Some(block.bbox),
+            ..Default::default()
         }];
         let layout = LayoutPage {
             size_pt: (400.0, 200.0),
@@ -2371,6 +2482,7 @@ mod tests {
                 image_path: None,
             }],
             bbox: Some(block.bbox),
+            ..Default::default()
         }];
         let layout = LayoutPage {
             size_pt: (400.0, 200.0),
@@ -2432,6 +2544,7 @@ mod tests {
                 image_path: None,
             }],
             bbox: Some(block.bbox),
+            ..Default::default()
         }];
         let layout = LayoutPage {
             size_pt: (400.0, 200.0),

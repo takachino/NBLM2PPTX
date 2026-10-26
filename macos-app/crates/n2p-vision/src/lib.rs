@@ -343,6 +343,11 @@ fn block_from_observation(observation: &Observation, size_pt: (f64, f64)) -> Blo
             image_path: None,
         }],
         bbox: Some(line_bbox),
+        confidence_milli: observation
+            .confidence
+            .is_finite()
+            .then(|| (observation.confidence.clamp(0.0, 1.0) * 1000.0).round() as u16),
+        observation_bbox: Some(bbox),
     }];
     block
 }
@@ -432,6 +437,7 @@ pub fn group_observations(observations: &[Observation], size_pt: (f64, f64)) -> 
                 .iter()
                 .map(|o| {
                     let (line_bbox, rot) = oriented_line_metrics(o, size_pt);
+                    let (x, y, w, h) = o.bbox_norm;
                     rot_sum += rot as i64;
                     Line {
                         spans: vec![Span {
@@ -439,6 +445,16 @@ pub fn group_observations(observations: &[Observation], size_pt: (f64, f64)) -> 
                             image_path: None,
                         }],
                         bbox: Some(line_bbox),
+                        confidence_milli: o
+                            .confidence
+                            .is_finite()
+                            .then(|| (o.confidence.clamp(0.0, 1.0) * 1000.0).round() as u16),
+                        observation_bbox: Some(BBox::new(
+                            norm_to_px(x, size_pt.0, false),
+                            norm_to_px(y, size_pt.1, false),
+                            norm_to_px(x + w, size_pt.0, true),
+                            norm_to_px(y + h, size_pt.1, true),
+                        )),
                     }
                 })
                 .collect();
@@ -493,6 +509,22 @@ mod tests {
         assert_eq!(blocks[0].text, "第一行\n第二行");
         assert_eq!(blocks[0].lines.len(), 2);
         assert_eq!(blocks[1].text, "遠處");
+    }
+
+    #[test]
+    fn grouping_retains_each_observations_confidence_and_original_box() {
+        let mut first = obs("small label", 0.1, 0.1, 0.3, 0.04);
+        first.confidence = 0.35;
+        let mut second = obs("normal body", 0.1, 0.15, 0.3, 0.04);
+        second.confidence = 0.98;
+        let blocks = group_observations(&[first, second], (1000.0, 500.0));
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].lines[0].confidence_milli, Some(350));
+        assert_eq!(blocks[0].lines[1].confidence_milli, Some(980));
+        assert_eq!(
+            blocks[0].lines[0].observation_bbox,
+            Some(BBox::new(100, 50, 400, 70))
+        );
     }
 
     #[test]

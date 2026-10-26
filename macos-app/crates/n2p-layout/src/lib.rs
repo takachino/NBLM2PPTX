@@ -103,6 +103,10 @@ pub struct Line {
     pub spans: Vec<Span>,
     /// 這一行的聯集邊界框（pt）。
     pub bbox: Option<BBox>,
+    /// OCR の信頼度 (0〜1000)。OCR を使わない入力では不明のまま保持する。
+    pub confidence_milli: Option<u16>,
+    /// 回転補正前の OCR 観測の外接矩形 (pt)。
+    pub observation_bbox: Option<BBox>,
 }
 
 impl Line {
@@ -192,6 +196,8 @@ impl LayoutPage {
                         .map(|l| Line {
                             spans: l.spans.clone(),
                             bbox: l.bbox.map(|bb| bb.scale(factor)),
+                            confidence_milli: l.confidence_milli,
+                            observation_bbox: l.observation_bbox.map(|bb| bb.scale(factor)),
                         })
                         .collect(),
                     rotation_mdeg: b.rotation_mdeg,
@@ -227,6 +233,8 @@ impl LayoutPage {
                         .map(|l| Line {
                             spans: l.spans.clone(),
                             bbox: l.bbox.map(shift),
+                            confidence_milli: l.confidence_milli,
+                            observation_bbox: l.observation_bbox.map(shift),
                         })
                         .collect(),
                     rotation_mdeg: b.rotation_mdeg,
@@ -300,6 +308,7 @@ mod tests {
                 },
             ],
             bbox: None,
+            ..Default::default()
         };
         assert_eq!(line.text(), "Hello world");
     }
@@ -317,5 +326,32 @@ mod tests {
         let shifted = page.translated_x(5.0, 130.0);
         assert_eq!(shifted.blocks[0].bbox, BBox::new(15, 10, 25, 20));
         assert_eq!(shifted.size_pt, (130.0, 50.0));
+    }
+
+    #[test]
+    fn coordinate_changes_preserve_ocr_confidence_and_transform_observation_boxes() {
+        let mut block = Block::new(BlockKind::Text, BBox::new(10, 10, 40, 30));
+        block.lines = vec![Line {
+            bbox: Some(block.bbox),
+            observation_bbox: Some(BBox::new(9, 8, 42, 32)),
+            confidence_milli: Some(950),
+            ..Default::default()
+        }];
+        let page = LayoutPage {
+            size_pt: (100.0, 50.0),
+            blocks: vec![block],
+        };
+        let scaled = page.scaled(2.0);
+        assert_eq!(scaled.blocks[0].lines[0].confidence_milli, Some(950));
+        assert_eq!(
+            scaled.blocks[0].lines[0].observation_bbox,
+            Some(BBox::new(18, 16, 84, 64))
+        );
+        let shifted = page.translated_x(5.0, 110.0);
+        assert_eq!(shifted.blocks[0].lines[0].confidence_milli, Some(950));
+        assert_eq!(
+            shifted.blocks[0].lines[0].observation_bbox,
+            Some(BBox::new(14, 8, 47, 32))
+        );
     }
 }

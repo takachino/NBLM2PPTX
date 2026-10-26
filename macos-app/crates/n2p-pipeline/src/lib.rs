@@ -107,6 +107,14 @@ pub struct ConvertReport {
     pub pictures: usize,
     pub watermarks_removed: usize,
     pub output_bytes: u64,
+    pub preserved_text: Vec<PreservedPage>,
+}
+
+/// 元画像に残した領域と理由。元 PDF のページ番号を保持する。
+#[derive(Debug, Clone)]
+pub struct PreservedPage {
+    pub source_page: usize,
+    pub regions: Vec<n2p_build::PreservedText>,
 }
 
 /// 轉換進度。頁序皆為 0 起算的「第幾個處理中的頁面」，`total` 是本次處理的頁數。
@@ -298,6 +306,15 @@ pub fn convert_with_progress(
         pictures: report.pages.iter().map(|p| p.pictures).sum(),
         watermarks_removed,
         output_bytes: std::fs::metadata(out_path).map(|m| m.len()).unwrap_or(0),
+        preserved_text: selected
+            .iter()
+            .zip(&report.pages)
+            .filter(|(_, page)| !page.preserved_text.is_empty())
+            .map(|(source_page, page)| PreservedPage {
+                source_page: *source_page,
+                regions: page.preserved_text.clone(),
+            })
+            .collect(),
     })
 }
 
@@ -627,6 +644,7 @@ mod tests {
                 "layout.json",
                 "mask-initial.png",
                 "mask-erasure.png",
+                "mask-preserved.png",
                 "background.png",
                 "build.json",
             ] {

@@ -12,6 +12,7 @@ pub struct PageDiagnostics {
     pub report: PageDiagnosticReport,
     pub initial_mask: Mask,
     pub erasure_mask: Mask,
+    pub preserved_mask: Mask,
     pub background: Option<RgbImage>,
 }
 
@@ -21,6 +22,7 @@ impl PageDiagnostics {
             report: PageDiagnosticReport::default(),
             initial_mask: Mask::new(image.width, image.height),
             erasure_mask: Mask::new(image.width, image.height),
+            preserved_mask: Mask::new(image.width, image.height),
             background: None,
         }
     }
@@ -31,11 +33,17 @@ pub struct PageDiagnosticReport {
     pub text_blocks: Vec<TextDiagnostic>,
     pub erasures: Vec<EraseDiagnostic>,
     pub lama_status: String,
+    pub preserved_text: Vec<crate::PreservedText>,
+    pub protected_boxes_pt: Vec<[i64; 4]>,
 }
 
 #[derive(Serialize)]
 pub struct TextDiagnostic {
     pub block_index: usize,
+    pub source_block_index: usize,
+    pub source_line_indices: Vec<usize>,
+    pub confidence_milli: Vec<Option<u16>>,
+    pub natural_font_size_pt: f64,
     pub text: String,
     pub bbox_pt: [i64; 4],
     pub text_region_pt: [i64; 4],

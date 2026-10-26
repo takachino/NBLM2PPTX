@@ -39,6 +39,10 @@ pub(crate) fn save_page(root: &Path, page: usize, diagnostics: &PageDiagnostics)
     for (name, image) in [
         ("mask-initial.png", mask_image(&diagnostics.initial_mask)),
         ("mask-erasure.png", mask_image(&diagnostics.erasure_mask)),
+        (
+            "mask-preserved.png",
+            mask_image(&diagnostics.preserved_mask),
+        ),
     ] {
         image
             .save(dir.join(name))
@@ -76,6 +80,8 @@ pub(crate) fn save_layout(root: &Path, page: usize, layout: &LayoutPage) -> Resu
                 "lines": block.lines.iter().map(|line| json!({
                     "text": line.text(),
                     "bbox_pt": line.bbox.map(bbox_array),
+                    "confidence_milli": line.confidence_milli,
+                    "observation_bbox_pt": line.observation_bbox.map(bbox_array),
                 })).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
         }),
