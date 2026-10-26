@@ -9,6 +9,8 @@
 //!
 //! 每一步的產物都留在工作目錄，方便中斷後重跑與除錯（與 Python 版一致）。
 
+mod diagnostics;
+
 use std::path::{Path, PathBuf};
 
 use n2p_build::{BuildOptions, PageInput};
@@ -186,6 +188,14 @@ pub fn convert_with_progress(
         let mut image = doc.render_rgb(index, options.dpi)?;
         let size_pt = doc.page_size_pt(index)?;
 
+        if let Some(dir) = &options.work_dir {
+            let page_dir = diagnostics::page_dir(dir, *page_num);
+            std::fs::create_dir_all(&page_dir)?;
+            image
+                .save(page_dir.join("source.png"))
+                .map_err(|e| Error::Image(e.to_string()))?;
+        }
+
         if options.inpaint {
             match n2p_image::inpaint_watermark(&image, options.inpaint_method) {
                 Ok(cleaned) => {
@@ -218,6 +228,28 @@ pub fn convert_with_progress(
     }
     let (layout_name, layouts) =
         resolve_layout(options, &images, &page_sizes_pt, &selected, total)?;
+    if let Some(dir) = &options.work_dir {
+        for (page_num, layout) in selected.iter().zip(&layouts) {
+            diagnostics::save_layout(dir, *page_num, layout)?;
+        }
+        let settings = serde_json::json!({
+            "source": pdf_path,
+            "pages": selected,
+            "dpi": options.dpi,
+            "watermark_inpaint": options.inpaint,
+            "watermark_method": format!("{:?}", options.inpaint_method),
+            "layout": layout_name,
+            "widescreen": options.widescreen,
+            "text_mode": format!("{:?}", options.build.text_mode),
+            "erase_mode": format!("{:?}", options.build.erase_mode),
+            "background_resolution": format!("{:?}", options.build.background_resolution),
+            "build_version": env!("CARGO_PKG_VERSION"),
+        });
+        std::fs::write(
+            dir.join("conversion.json"),
+            serde_json::to_vec_pretty(&settings).map_err(|e| Error::Config(e.to_string()))?,
+        )?;
+    }
 
     // ── 3. 產生簡報 ───────────────────────────────────────────────────────
     let inputs: Vec<PageInput<'_>> = layouts
@@ -227,17 +259,32 @@ pub fn convert_with_progress(
         .collect();
 
     let total_pages = inputs.len();
-    let (deck, report) =
-        n2p_build::build_deck_with_progress(&inputs, &options.build, &mut |page| {
+    let mut save_diagnostics = |slot: usize, page: &n2p_build::diagnostics::PageDiagnostics| {
+        let Some(dir) = &options.work_dir else {
+            return Ok(());
+        };
+        diagnostics::save_page(dir, selected[slot], page)
+            .map_err(|error| n2p_build::Error::Diagnostics(error.to_string()))
+    };
+    let sink: Option<&mut n2p_build::diagnostics::DiagnosticSink<'_>> = options
+        .work_dir
+        .as_ref()
+        .map(|_| &mut save_diagnostics as &mut _);
+    let (deck, report) = n2p_build::build_deck_with_diagnostics(
+        &inputs,
+        &options.build,
+        &mut |page| {
             progress(Progress::Build {
                 page,
                 total: total_pages,
             })
-        })
-        .map_err(|e| match e {
-            n2p_build::Error::Cancelled => Error::Cancelled,
-            other => Error::Build(other),
-        })?;
+        },
+        sink,
+    )
+    .map_err(|e| match e {
+        n2p_build::Error::Cancelled => Error::Cancelled,
+        other => Error::Build(other),
+    })?;
     if !progress(Progress::Save) {
         return Err(Error::Cancelled);
     }
@@ -336,6 +383,9 @@ fn resolve_layout(
         LayoutSource::Vision(config) => {
             let document = VisionDocument::from_images(images, page_sizes_pt, config)
                 .map_err(|e| Error::Layout(e.to_string()))?;
+            if let Some(dir) = &options.work_dir {
+                diagnostics::save_ocr(dir, selected, &document, config)?;
+            }
             Ok(("vision".to_owned(), document.pages()?))
         }
 
@@ -367,7 +417,12 @@ fn resolve_layout(
         LayoutSource::Auto => {
             let vision = VisionConfig::default();
             match VisionDocument::from_images(images, page_sizes_pt, &vision) {
-                Ok(document) => Ok(("vision".to_owned(), document.pages()?)),
+                Ok(document) => {
+                    if let Some(dir) = &options.work_dir {
+                        diagnostics::save_ocr(dir, selected, &document, &vision)?;
+                    }
+                    Ok(("vision".to_owned(), document.pages()?))
+                }
                 Err(_) => resolve_layout(
                     &ConvertOptions {
                         layout: LayoutSource::None,
@@ -565,6 +620,42 @@ mod tests {
         convert(&example_pdf(), &temp_out("work.pptx"), &options).unwrap();
         assert!(dir.join("page_0001.png").exists());
         assert!(dir.join("page_0002.png").exists());
+        for page in [1, 2] {
+            let page_dir = diagnostics::page_dir(&dir, page);
+            for name in [
+                "source.png",
+                "layout.json",
+                "mask-initial.png",
+                "mask-erasure.png",
+                "background.png",
+                "build.json",
+            ] {
+                assert!(page_dir.join(name).exists(), "missing page {page}/{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn diagnostics_keep_original_page_number_for_selected_pages() {
+        let dir = std::env::temp_dir()
+            .join("n2p-pipeline-tests")
+            .join("selected-work");
+        let _ = std::fs::remove_dir_all(&dir);
+        let options = ConvertOptions {
+            layout: LayoutSource::None,
+            inpaint: false,
+            pages: Some(vec![2]),
+            work_dir: Some(dir.clone()),
+            ..Default::default()
+        };
+        convert(&example_pdf(), &temp_out("selected-work.pptx"), &options).unwrap();
+        assert!(!diagnostics::page_dir(&dir, 1).exists());
+        let report: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(diagnostics::page_dir(&dir, 2).join("build.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(report["source_page"], 2);
+        assert_eq!(report["report"]["text_blocks"], serde_json::json!([]));
     }
 
     #[cfg(target_os = "macos")]

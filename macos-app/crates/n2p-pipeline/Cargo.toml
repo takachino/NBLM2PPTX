@@ -16,6 +16,4 @@ n2p-mineru = { path = "../n2p-mineru" }
 n2p-ooxml = { path = "../n2p-ooxml" }
 n2p-pdf = { path = "../n2p-pdf" }
 n2p-vision = { path = "../n2p-vision" }
-
-[dev-dependencies]
 serde_json.workspace = true

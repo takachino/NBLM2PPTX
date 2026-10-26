@@ -72,7 +72,12 @@ impl Region {
 }
 
 /// 對遮罩內的像素做拉普拉斯（Jacobi）平滑。
-fn smooth_masked(region: &mut Region, region_mask: &[bool], max_iter: usize) {
+fn smooth_masked(
+    region: &mut Region,
+    region_mask: &[bool],
+    valid_background: &[bool],
+    max_iter: usize,
+) {
     if region.width < 3 || region.height < 3 {
         return;
     }
@@ -84,13 +89,25 @@ fn smooth_masked(region: &mut Region, region_mask: &[bool], max_iter: usize) {
                 if !region_mask[region.index(x, y)] {
                     continue;
                 }
-                let up = region.data[region.index(x, y - 1)];
-                let down = region.data[region.index(x, y + 1)];
-                let left = region.data[region.index(x - 1, y)];
-                let right = region.data[region.index(x + 1, y)];
-                for channel in 0..3 {
-                    scratch[region.index(x, y)][channel] =
-                        (up[channel] + down[channel] + left[channel] + right[channel]) / 4.0;
+                let mut sum = [0.0; 3];
+                let mut count = 0;
+                for neighbour in [
+                    region.index(x, y - 1),
+                    region.index(x, y + 1),
+                    region.index(x - 1, y),
+                    region.index(x + 1, y),
+                ] {
+                    if region_mask[neighbour] || valid_background[neighbour] {
+                        for (channel, total) in sum.iter_mut().enumerate() {
+                            *total += region.data[neighbour][channel];
+                        }
+                        count += 1;
+                    }
+                }
+                if count > 0 {
+                    for (channel, total) in sum.iter().enumerate() {
+                        scratch[region.index(x, y)][channel] = *total / count as f32;
+                    }
                 }
             }
         }
@@ -434,15 +451,25 @@ pub fn nearest_neighbour(
     max_iter: usize,
     fallback: [u8; 3],
 ) -> RgbImage {
+    nearest_neighbour_with_limit(image, mask, max_iter, fallback, 80.0)
+}
+
+/// 背景色の許容距離を明示した最近傍補間。文字消去では薄い残存文字も除外する。
+pub fn nearest_neighbour_with_limit(
+    image: &RgbImage,
+    mask: &Mask,
+    max_iter: usize,
+    fallback: [u8; 3],
+    color_limit: f32,
+) -> RgbImage {
     // 允許的色差：同一個色帶內的變化遠小於這個值，深色圖示則遠大於。
-    const FALLBACK_LIMIT: f32 = 80.0;
     let fallback_f = [fallback[0] as f32, fallback[1] as f32, fallback[2] as f32];
     let acceptable = |pixel: &[f32; 3]| -> bool {
         let distance = ((pixel[0] - fallback_f[0]).powi(2)
             + (pixel[1] - fallback_f[1]).powi(2)
             + (pixel[2] - fallback_f[2]).powi(2))
         .sqrt();
-        distance <= FALLBACK_LIMIT
+        distance <= color_limit
     };
     let Some(bbox) = mask.padded_bbox(2) else {
         return image.clone();
@@ -452,7 +479,12 @@ pub fn nearest_neighbour(
     let region_mask = mask_in_region(mask, bbox);
 
     // 已知 = 尚未被填過的像素；從未遮罩像素往外一圈圈長
-    let mut known: Vec<bool> = region_mask.iter().map(|inside| !*inside).collect();
+    let valid_background: Vec<bool> = region_mask
+        .iter()
+        .zip(&region.data)
+        .map(|(inside, pixel)| !*inside && acceptable(pixel))
+        .collect();
+    let mut known = valid_background.clone();
     let mut pending: Vec<usize> = (0..region_mask.len())
         .filter(|index| region_mask[*index])
         .collect();
@@ -506,7 +538,7 @@ pub fn nearest_neighbour(
     }
 
     if max_iter > 0 && region.width >= 3 && region.height >= 3 {
-        smooth_masked(&mut region, &region_mask, max_iter);
+        smooth_masked(&mut region, &region_mask, &valid_background, max_iter);
     }
 
     for (index, inside) in region_mask.iter().enumerate() {
@@ -599,5 +631,30 @@ mod tests {
         assert_eq!(onion(&img, &mask), img);
         assert_eq!(idw(&img, &mask, 4, 1), img);
         assert_eq!(harmonic(&img, &mask, 10), img);
+    }
+
+    #[test]
+    fn nearest_neighbour_keeps_rejected_text_out_of_smoothing() {
+        let background = [12, 30, 54];
+        let mut image = RgbImage::filled(40, 30, background);
+        let mask = Mask::from_bbox(40, 30, BBox::new(12, 8, 24, 22));
+        // マスクに隣接する別の白文字は採色にも平滑化にも使わない。
+        for y in 8..22 {
+            image.set_pixel(11, y, [255, 255, 255]);
+            for x in 12..24 {
+                image.set_pixel(x, y, [255, 255, 255]);
+            }
+        }
+        let output = nearest_neighbour(&image, &mask, 100, background);
+        for y in 0..image.height {
+            for x in 0..image.width {
+                let expected = if mask.get(x, y) {
+                    background
+                } else {
+                    image.pixel(x, y)
+                };
+                assert_eq!(output.pixel(x, y), expected, "({x}, {y})");
+            }
+        }
     }
 }

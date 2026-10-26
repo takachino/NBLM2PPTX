@@ -21,8 +21,11 @@
 //!   縮成 1376×768）再當背景，等於丟掉一半解析度。這裡預設維持原行為以求等價，
 //!   但可以用 [`BackgroundResolution::FullImage`] 保留完整解析度。
 
+pub mod diagnostics;
 pub mod fonts;
 pub mod fontsize;
+
+use diagnostics::{DiagnosticSink, EraseDiagnostic, PageDiagnostics, TextDiagnostic, bbox_array};
 
 use n2p_core::{BBox, RgbImage};
 use n2p_image::{Mask, edge_diversity};
@@ -109,6 +112,9 @@ pub enum Error {
 
     #[error("已取消")]
     Cancelled,
+
+    #[error("診断出力に失敗しました: {0}")]
+    Diagnostics(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -252,6 +258,16 @@ pub fn build_deck_with_progress(
     options: &BuildOptions,
     progress: &mut dyn FnMut(usize) -> bool,
 ) -> Result<(Deck, BuildReport)> {
+    build_deck_with_diagnostics(inputs, options, progress, None)
+}
+
+/// 診断はページごとに通知する。保存先と元 PDF のページ番号は呼び出し元が管理する。
+pub fn build_deck_with_diagnostics(
+    inputs: &[PageInput<'_>],
+    options: &BuildOptions,
+    progress: &mut dyn FnMut(usize) -> bool,
+    mut sink: Option<&mut DiagnosticSink<'_>>,
+) -> Result<(Deck, BuildReport)> {
     if inputs.is_empty() {
         return Err(Error::NoPages);
     }
@@ -299,6 +315,7 @@ pub fn build_deck_with_progress(
         if index > 0 {
             merge::append_slide(&mut deck, &template, 0).map_err(Error::Ooxml)?;
         }
+        let mut diagnostics = sink.as_ref().map(|_| PageDiagnostics::new(input.image));
         let page_report = build_page(
             &mut deck,
             index,
@@ -307,7 +324,11 @@ pub fn build_deck_with_progress(
             options,
             east_asian.as_deref(),
             &latin,
+            diagnostics.as_mut(),
         )?;
+        if let (Some(sink), Some(diagnostics)) = (&mut sink, &diagnostics) {
+            sink(index, diagnostics)?;
+        }
         report.pages.push(page_report);
     }
 
@@ -315,6 +336,7 @@ pub fn build_deck_with_progress(
     Ok((deck, report))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_page(
     deck: &mut Deck,
     index: usize,
@@ -323,6 +345,7 @@ fn build_page(
     options: &BuildOptions,
     east_asian_font: Option<&str>,
     latin_font: &str,
+    mut diagnostics: Option<&mut PageDiagnostics>,
 ) -> Result<PageReport> {
     let layout = input.layout;
     let (slide_cx, slide_cy) = slide_size.emu();
@@ -343,7 +366,7 @@ fn build_page(
     // 沒轉成文字框的區塊（例如只有一個 `◎` 的子彈點）必須留在背景上，
     // 擦掉就等於把原稿的圖示刪了。
     let mut erase_regions: Vec<EraseRegion> = Vec::new();
-    for block in layout.text_blocks() {
+    for (block_index, block) in layout.text_blocks().enumerate() {
         // 先用幾何判斷把左側的項目符號／小圖示從 bbox 排除，再拿「純文字 bbox」
         // 去算字級、置中與擦除。少了這一步，bbox 含子彈點會讓字級偏大、
         // 文字置中後壓到子彈點上。傾斜文字不走水平投影裁切。
@@ -355,7 +378,25 @@ fn build_page(
 
         // 短小的非中文區塊若壓在圖形上，通常是 Vision 把裝飾讀成文字
         // （第 3 頁的引號裝飾被讀成 "99"）。這種區塊留給背景，不要重複畫一次。
-        if is_decoration_block(input.image, text_region, image_scale, &block.text) {
+        let decoration = is_decoration_block(input.image, text_region, image_scale, &block.text);
+        if let Some(diagnostics) = &mut diagnostics {
+            diagnostics.report.text_blocks.push(TextDiagnostic {
+                block_index,
+                text: block.text.clone(),
+                bbox_pt: bbox_array(block.bbox),
+                text_region_pt: bbox_array(text_region),
+                line_boxes_pt: block.lines.iter().map(|l| l.bbox.map(bbox_array)).collect(),
+                rotation_mdeg: block.rotation_mdeg,
+                decision: if decoration {
+                    "preserve-decoration"
+                } else {
+                    "skip-empty-or-watermark"
+                },
+                color: None,
+                density: None,
+            });
+        }
+        if decoration {
             report.skipped_text += 1;
             continue;
         }
@@ -367,7 +408,11 @@ fn build_page(
             em_px,
         );
         let text_color = analysis.color;
-        let stroke_mask = Some(analysis.mask.clone());
+        if let Some(diagnostics) = &mut diagnostics {
+            let entry = diagnostics.report.text_blocks.last_mut().unwrap();
+            entry.color = Some(text_color);
+            entry.density = Some(analysis.density);
+        }
 
         let env = TextEnv {
             scale,
@@ -397,26 +442,67 @@ fn build_page(
         };
         deck.push_text_box(index, &text_box).map_err(Error::Ooxml)?;
         report.text_boxes += 1;
+        if let Some(diagnostics) = &mut diagnostics {
+            diagnostics.report.text_blocks.last_mut().unwrap().decision = "editable-text";
+        }
 
         // 擦除範圍 = 同一塊「純文字」區域，因此字級、位置、擦除三者一致。
         if options.text_mode == TextMode::Overlay {
             continue;
         }
-        if let Some(mask) = stroke_mask {
+        // 複数行を一つの採色範囲にすると、帯の外側や別の見出しが混ざる。
+        // 回転文字の行 bbox は回転前の寸法なので、従来の外接矩形を使う。
+        let line_regions: Vec<(Option<usize>, BBox)> = if block.rotation_mdeg.abs() < 3_000
+            && matches!(options.erase_mode, EraseMode::StrokeMask | EraseMode::Lama)
+        {
+            block
+                .lines
+                .iter()
+                .enumerate()
+                .filter_map(|(index, line)| line.bbox.map(|bbox| (index, bbox)))
+                .map(|(index, bbox)| {
+                    (
+                        Some(index),
+                        BBox::new(
+                            bbox.left.max(text_region.left),
+                            bbox.top.max(text_region.top),
+                            bbox.right.min(text_region.right),
+                            bbox.bottom.min(text_region.bottom),
+                        ),
+                    )
+                })
+                .filter(|(_, bbox)| !bbox.is_empty())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let line_regions = if line_regions.is_empty() {
+            vec![(None, text_region)]
+        } else {
+            line_regions
+        };
+        for (line_index, region) in line_regions {
+            let mask = n2p_image::textmask::analyze_with_line_height(
+                input.image,
+                region.scale(image_scale),
+                em_px,
+            )
+            .mask;
+            if let Some(diagnostics) = &mut diagnostics {
+                merge_scaled(&mut diagnostics.initial_mask, &mask);
+            }
             erase_regions.push(EraseRegion {
-                region: text_region,
+                block_index,
+                line_index,
+                region,
                 mask,
                 expand_px: mask_expand_px(
                     input.image,
-                    text_region.scale(image_scale),
+                    region.scale(image_scale),
                     em_px,
                     text_color,
                 ),
-                flat_background: is_flat_background(
-                    input.image,
-                    text_region.scale(image_scale),
-                    em_px,
-                ),
+                flat_background: is_flat_background(input.image, region.scale(image_scale), em_px),
             });
         }
     }
@@ -437,7 +523,7 @@ fn build_page(
     }
 
     // ── 3. 背景 ────────────────────────────────────────────────────────────
-    let (background, objects) = prepare_background(input, options, &erase_regions)?;
+    let (background, objects) = prepare_background(input, options, &erase_regions, diagnostics)?;
     deck.set_background_picture(index, background, "png")
         .map_err(Error::Ooxml)?;
     // 物件置底（在文字之下、背景之上）。
@@ -691,7 +777,12 @@ fn trim_block_icon(image: &RgbImage, bbox: BBox, image_scale: f64, text: &str) -
         return bbox;
     }
     let prelim_em = (bbox.width() as f64 / units).max(1.0);
-    let trimmed = trim_leading_icon(image, bbox.scale(image_scale), prelim_em * image_scale);
+    let trimmed = trim_leading_icon(
+        image,
+        bbox.scale(image_scale),
+        prelim_em * image_scale,
+        strip_leading_bullet(text).1 > 0.0,
+    );
     let trimmed = BBox::new(
         (trimmed.left as f64 / image_scale).round() as i64,
         (trimmed.top as f64 / image_scale).round() as i64,
@@ -918,7 +1009,7 @@ fn background_color(image: &RgbImage, bbox: BBox, pad: i64) -> [u8; 3] {
 ///
 /// 這比「靠 OCR 有沒有讀到符號」可靠：Vision 有時把 `◎` 讀成文字，有時完全不提，
 /// 但幾何上空隙一定在。
-fn trim_leading_icon(image: &RgbImage, bbox: BBox, em_px: f64) -> BBox {
+fn trim_leading_icon(image: &RgbImage, bbox: BBox, em_px: f64, known_bullet: bool) -> BBox {
     let bbox = bbox.clamp(image.width as i64, image.height as i64);
     if bbox.width() < 3 || bbox.height() < 3 || em_px <= 0.0 || !em_px.is_finite() {
         return bbox;
@@ -971,7 +1062,13 @@ fn trim_leading_icon(image: &RgbImage, bbox: BBox, em_px: f64) -> BBox {
         return bbox;
     }
     let rest_ink = ink[gap_end..].iter().filter(|v| **v).count() as f64;
-    if rest_ink < em_px * 2.0 || rest_ink <= island_width {
+    let enough_text = if known_bullet {
+        // OCR でも項目記号を確認できた場合、細い本文を画素数で却下しない。
+        (ink.len() - gap_end) as f64 >= em_px * 2.0
+    } else {
+        rest_ink >= em_px * 2.0 && rest_ink > island_width
+    };
+    if !enough_text {
         return bbox;
     }
 
@@ -1041,20 +1138,86 @@ fn is_flat_background(image: &n2p_core::RgbImage, bbox: BBox, em_px: f64) -> boo
 }
 
 struct EraseRegion {
+    block_index: usize,
+    line_index: Option<usize>,
     region: BBox,
     /// 已算好的筆畫遮罩（只含文字筆畫）。
     mask: Mask,
     /// 擦除前遮罩要往外擴幾個像素（吃掉抗鋸齒亮邊與光暈）。
     expand_px: u32,
-    /// 背景是否平坦（色塊／漸層）。平坦時用插值填色最乾淨；
-    /// 有紋理時才交給 LaMa 重建。
+    /// マスク拡張に使った従来のリング判定を診断用に保持する。
+    /// 補間の選択には枠内の RGB 分布を使う。
     flat_background: bool,
+}
+
+struct PreparedTextErase {
+    block_index: usize,
+    line_index: Option<usize>,
+    bbox: BBox,
+    mask: Mask,
+    background: Option<n2p_image::text_inpaint::BackgroundEstimate>,
+    ring_flat: bool,
+    expand_px: u32,
+}
+
+fn prepare_text_erasure(
+    source: &RgbImage,
+    layout_width: f64,
+    mode: EraseMode,
+    regions: &[EraseRegion],
+) -> (Vec<PreparedTextErase>, Mask) {
+    let mut all_text = Mask::new(source.width, source.height);
+    let scaled: Vec<(BBox, Mask, u32, &EraseRegion)> = regions
+        .iter()
+        .map(|region| {
+            let mut mask = Mask::new(source.width, source.height);
+            merge_scaled(&mut mask, &region.mask);
+            merge_scaled(&mut all_text, &mask);
+            let ratio = source.width as f64 / region.mask.width as f64;
+            let radius = (region.expand_px as f64 * ratio).round() as u32;
+            (
+                region
+                    .region
+                    .scale(source.width as f64 / layout_width)
+                    .clamp(source.width as i64, source.height as i64),
+                mask,
+                radius,
+                region,
+            )
+        })
+        .collect();
+    let prepared: Vec<PreparedTextErase> = scaled
+        .into_iter()
+        .map(|(bbox, initial, radius, region)| {
+            let background = n2p_image::text_inpaint::estimate_background(source, bbox, &all_text);
+            let mask = match (&background, mode) {
+                (Some(background), EraseMode::Lama) => n2p_image::text_inpaint::expand_mask(
+                    source, &initial, &all_text, bbox, radius, background,
+                ),
+                _ => initial,
+            };
+            PreparedTextErase {
+                block_index: region.block_index,
+                line_index: region.line_index,
+                bbox,
+                mask,
+                background,
+                ring_flat: region.flat_background,
+                expand_px: if mode == EraseMode::Lama { radius } else { 0 },
+            }
+        })
+        .collect();
+    for region in &prepared {
+        merge_scaled(&mut all_text, &region.mask);
+    }
+    (prepared, all_text)
 }
 
 fn prepare_background(
     input: &PageInput<'_>,
     options: &BuildOptions,
     erase_regions: &[EraseRegion],
+    mut diagnostics: Option<&mut PageDiagnostics>,
 ) -> Result<(Vec<u8>, Vec<ExtractedObject>)> {
     let _ = input.layout;
     let layout = input.layout;
@@ -1088,48 +1251,47 @@ fn prepare_background(
             }
         }
     }
+    if let Some(diagnostics) = &mut diagnostics {
+        diagnostics.report.lama_status = match &engine_guard {
+            Some(guard) if guard.is_some() => "loaded",
+            Some(_) => "unavailable",
+            None => "not-requested",
+        }
+        .to_owned();
+    }
 
     // 已擦字區域（以背景圖當下的尺寸記錄）。SAM 會把文字塗抹塊當成物件，
     // 用這張遮罩把它們濾掉。
     let mut erased_text = Mask::new(image.width, image.height);
 
     if options.erase_background_regions && options.text_mode == TextMode::Erase {
-        let image_scale = image.width as f64 / layout.size_pt.0;
-        for EraseRegion {
-            region,
+        let source = image.clone();
+        let (regions, all_text) =
+            prepare_text_erasure(&source, layout.size_pt.0, options.erase_mode, erase_regions);
+        for PreparedTextErase {
+            block_index,
+            line_index,
+            bbox,
             mask,
+            background,
+            ring_flat,
             expand_px,
-            flat_background,
-        } in erase_regions
+        } in regions
         {
-            let bbox = region
-                .scale(image_scale)
-                .clamp(image.width as i64, image.height as i64);
             if bbox.is_empty() {
                 continue;
             }
-            // 筆畫遮罩是以原始頁面影像的尺寸算的；背景縮成頁面尺寸（預設）時要
-            // 換算過來，否則遮罩座標全部落在影像外，文字一個像素都不會被擦掉。
-            let ratio = input.image.width as f64 / image.width as f64;
-            let scaled;
-            let (mask, expand_px) = if mask.width == image.width && mask.height == image.height {
-                (mask, *expand_px)
-            } else {
-                let mut converted = Mask::new(image.width, image.height);
-                merge_scaled(&mut converted, mask);
-                scaled = converted;
-                (&scaled, ((*expand_px as f64 / ratio).round() as u32).max(1))
-            };
-            let expand_px = &expand_px;
+            let mut method = "source-preserved-no-background";
+            let mut model_error = None;
             match options.erase_mode {
                 EraseMode::Flat | EraseMode::Inpaint => mark_bbox(&mut erased_text, bbox),
-                EraseMode::StrokeMask => merge_scaled(&mut erased_text, mask),
-                EraseMode::Lama => {}
+                EraseMode::StrokeMask | EraseMode::Lama => merge_scaled(&mut erased_text, &mask),
             }
             match options.erase_mode {
                 EraseMode::Flat => {
+                    method = "flat-fill";
                     // Python 版行為：整塊填成邊緣主色。
-                    let (_, fill_color) = edge_diversity(&image, bbox, ERASE_TOLERANCE);
+                    let (_, fill_color) = edge_diversity(&source, bbox, ERASE_TOLERANCE);
                     for y in bbox.top..bbox.bottom {
                         for x in bbox.left..bbox.right {
                             image.set_pixel(x as u32, y as u32, fill_color);
@@ -1137,6 +1299,7 @@ fn prepare_background(
                     }
                 }
                 EraseMode::Inpaint => {
+                    method = "rectangle-inpaint";
                     // 從四周插值，避免在漸層或雙色背景上留下方塊。
                     n2p_image::inpaint_bbox_in_place(
                         &mut image,
@@ -1146,42 +1309,68 @@ fn prepare_background(
                 }
                 EraseMode::StrokeMask => {
                     // 遮罩在文字階段就算好了，這裡只負責修補文字筆畫。
-                    n2p_image::inpaint_mask_in_place(
-                        &mut image,
-                        mask,
-                        n2p_image::InpaintMethod::BackgroundSmooth,
-                    );
+                    if let Some(background) = &background {
+                        method = "local-nearest-neighbour";
+                        n2p_image::text_inpaint::inpaint_in_place(
+                            &mut image, &source, &mask, &all_text, background,
+                        );
+                    }
                 }
                 EraseMode::Lama => {
                     let engine = engine_guard.as_mut().and_then(|guard| guard.as_mut());
-                    let mut expanded = mask.clone();
-                    // 光暈可以往文字框外擴，但不要波及旁邊的裝飾圖案。
-                    let limit = expand_bbox(bbox, (*expand_px as i64).min(16) + 2);
-                    expanded.dilate_within(*expand_px, limit);
                     // 平坦背景：插值填色比生成模型乾淨得多。LaMa 在「一大片
                     // 純色」上常補出偏暗的雲狀色塊（CH9 第 3 頁實測）。
-                    merge_scaled(&mut erased_text, &expanded);
-                    let engine = if *flat_background { None } else { engine };
+                    let engine = if background.as_ref().is_some_and(|b| b.flat) {
+                        None
+                    } else {
+                        engine
+                    };
                     match engine {
                         Some(engine) => {
-                            if let Err(error) = engine.inpaint_mask(&mut image, &expanded) {
+                            method = "lama";
+                            if let Err(error) = engine.inpaint_mask(&mut image, &mask) {
                                 eprintln!("  ! LaMa 修補失敗（{error}），改用插值");
-                                n2p_image::inpaint_mask_in_place(
-                                    &mut image,
-                                    &expanded,
-                                    n2p_image::InpaintMethod::BackgroundSmooth,
+                                model_error = Some(error.to_string());
+                                method = "source-preserved-no-background";
+                                if let Some(background) = &background {
+                                    method = "local-nearest-neighbour-after-lama-error";
+                                    n2p_image::text_inpaint::inpaint_in_place(
+                                        &mut image, &source, &mask, &all_text, background,
+                                    );
+                                }
+                            }
+                        }
+                        None => {
+                            if let Some(background) = &background {
+                                method = if background.flat {
+                                    "local-nearest-neighbour-flat"
+                                } else {
+                                    "local-nearest-neighbour-model-unavailable"
+                                };
+                                n2p_image::text_inpaint::inpaint_in_place(
+                                    &mut image, &source, &mask, &all_text, background,
                                 );
                             }
                         }
-                        None => n2p_image::inpaint_mask_in_place(
-                            &mut image,
-                            &expanded,
-                            // 平坦背景用「逐像素最近背景色」當種子：文字壓在
-                            // 色帶交界時，單一主色會留下比色帶淡的方塊。
-                            n2p_image::InpaintMethod::NearestNeighbour,
-                        ),
                     }
                 }
+            }
+            if let Some(diagnostics) = &mut diagnostics {
+                diagnostics.report.erasures.push(EraseDiagnostic {
+                    block_index,
+                    line_index,
+                    bbox_px: bbox_array(bbox),
+                    expand_px,
+                    mask_bbox_px: mask.bbox().map(bbox_array),
+                    mask_pixels: mask.count(),
+                    ring_flat,
+                    sampling_bbox_px: background.as_ref().map(|b| bbox_array(b.sample_bbox)),
+                    background_color: background.as_ref().map(|b| b.color),
+                    background_samples: background.as_ref().map_or(0, |b| b.samples),
+                    local_flat: background.as_ref().is_some_and(|b| b.flat),
+                    method,
+                    model_error,
+                });
             }
         }
     }
@@ -1199,6 +1388,10 @@ fn prepare_background(
         Vec::new()
     };
 
+    if let Some(diagnostics) = diagnostics {
+        diagnostics.erasure_mask = erased_text;
+        diagnostics.background = Some(image.clone());
+    }
     let png = image.to_png().map_err(|e| Error::Image(e.to_string()))?;
     Ok((png, objects))
 }
@@ -1490,6 +1683,95 @@ mod tests {
                 },
             ],
         }
+    }
+
+    fn erase_fixture(background: RgbImage, boxes: &[BBox], ink: [u8; 3]) {
+        let mut source = background.clone();
+        let mut mask = Mask::new(source.width, source.height);
+        for bbox in boxes {
+            for y in bbox.top..bbox.bottom {
+                for x in bbox.left..bbox.right {
+                    if (x - bbox.left) % 12 < 3 {
+                        mask.set(x as u32, y as u32, true);
+                        source.set_pixel(x as u32, y as u32, ink);
+                    }
+                }
+            }
+        }
+        let region = BBox::new(
+            boxes.iter().map(|b| b.left).min().unwrap(),
+            boxes.iter().map(|b| b.top).min().unwrap(),
+            boxes.iter().map(|b| b.right).max().unwrap(),
+            boxes.iter().map(|b| b.bottom).max().unwrap(),
+        );
+        let layout = LayoutPage {
+            size_pt: (source.width as f64, source.height as f64),
+            blocks: Vec::new(),
+        };
+        let input = PageInput {
+            layout: &layout,
+            image: &source,
+        };
+        let options = BuildOptions {
+            erase_mode: EraseMode::Lama,
+            background_resolution: BackgroundResolution::FullImage,
+            ..Default::default()
+        };
+        let regions = [EraseRegion {
+            block_index: 0,
+            line_index: None,
+            region,
+            mask,
+            expand_px: 8,
+            flat_background: true,
+        }];
+        let (png, _) = prepare_background(&input, &options, &regions, None).unwrap();
+        let actual = RgbImage::from_png_bytes(&png).unwrap();
+        for y in 0..background.height {
+            for x in 0..background.width {
+                assert_eq!(actual.pixel(x, y), background.pixel(x, y), "({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn restores_two_line_banner_without_importing_white_page() {
+        for scale in [1, 2] {
+            let mut background = RgbImage::filled(240 * scale, 160 * scale, [255; 3]);
+            for y in 120 * scale..160 * scale {
+                for x in 0..background.width {
+                    background.set_pixel(x, y, [12, 30, 54]);
+                }
+            }
+            erase_fixture(
+                background,
+                &[
+                    BBox::new(16, 124, 224, 136).scale(scale as f64),
+                    BBox::new(16, 144, 224, 156).scale(scale as f64),
+                ],
+                [255; 3],
+            );
+        }
+    }
+
+    #[test]
+    fn restores_light_card_without_importing_dark_frame() {
+        let mut background = RgbImage::filled(240, 160, [12, 30, 54]);
+        for y in 50..145 {
+            for x in 30..210 {
+                background.set_pixel(x, y, [232, 242, 248]);
+            }
+        }
+        erase_fixture(
+            background,
+            &[
+                BBox::new(38, 54, 202, 66),
+                BBox::new(38, 74, 202, 86),
+                BBox::new(38, 94, 202, 106),
+                BBox::new(38, 114, 202, 126),
+            ],
+            [10; 3],
+        );
     }
 
     #[test]

@@ -163,7 +163,7 @@ struct ConvertArgs {
     #[arg(long, value_enum, default_value = "erase")]
     text_mode: TextModeArg,
 
-    /// 保留中間產物（頁面 PNG）到此目錄
+    /// 中間画像、OCR、文字消去マスク、背景補間の診断を保存するディレクトリ
     #[arg(long, value_name = "DIR")]
     work_dir: Option<PathBuf>,
 }

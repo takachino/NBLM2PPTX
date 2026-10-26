@@ -94,16 +94,33 @@ pub fn analyze_with_line_height(image: &RgbImage, bbox: BBox, line_height_px: f6
     } else {
         255.0
     };
-    let light_text = border_mean < LIGHT_BACKGROUND_THRESHOLD; // 暗底 → 淺色字
-
-    // 策略 1：全域 Otsu
+    // 127 だけでは中間色の背景にある白文字を判別できない。
+    // 二つの輝度群のうち、枠線の輝度に近い側を背景とする。
     let otsu = otsu_threshold(&gray);
+    let (mut low_sum, mut low_count, mut high_sum, mut high_count) = (0u64, 0u64, 0u64, 0u64);
+    for value in &gray {
+        if *value as f64 <= otsu {
+            low_sum += *value as u64;
+            low_count += 1;
+        } else {
+            high_sum += *value as u64;
+            high_count += 1;
+        }
+    }
+    let light_text = if low_count > 0 && high_count > 0 {
+        (border_mean - low_sum as f64 / low_count as f64).abs()
+            <= (border_mean - high_sum as f64 / high_count as f64).abs()
+    } else {
+        border_mean < LIGHT_BACKGROUND_THRESHOLD
+    };
+
+    // 策略 1：全域 Otsu。暗い群の境界値も筆画に含める。
     let mut hit_otsu = vec![false; w * h];
     for (index, value) in gray.iter().enumerate() {
         hit_otsu[index] = if light_text {
             *value as f64 > otsu
         } else {
-            (*value as f64) < otsu
+            (*value as f64) <= otsu && low_count < gray.len() as u64
         };
     }
 
@@ -523,6 +540,28 @@ mod tests {
         );
         assert!(analysis.mask.get(10, 30));
         assert!(!analysis.mask.get(20, 30));
+    }
+
+    #[test]
+    fn light_text_on_mid_tone_background_keeps_solid_strokes() {
+        let image = stripes_image([150, 145, 140], [250; 3]);
+        let analysis = analyze(&image, BBox::new(5, 5, 195, 55));
+        assert!(analysis.mask.get(11, 30), "白文字の中心を消去対象にする");
+        assert!(!analysis.mask.get(20, 30), "背景を文字と取り違えない");
+        assert!(analysis.color[0] > 230, "文字色: {:?}", analysis.color);
+    }
+
+    #[test]
+    fn otsu_includes_the_dark_peak_in_solid_strokes() {
+        let mut image = RgbImage::filled(100, 40, [240; 3]);
+        for y in 10..30 {
+            for x in 20..30 {
+                image.set_pixel(x, y, [20; 3]);
+            }
+        }
+        let analysis = analyze(&image, BBox::new(5, 5, 95, 35));
+        assert!(analysis.mask.get(25, 20));
+        assert_eq!(analysis.color, [20; 3]);
     }
 
     #[test]
