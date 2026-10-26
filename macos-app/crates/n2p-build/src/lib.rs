@@ -734,11 +734,26 @@ fn text_box_for(
         (rect.right_pt + cover_padding_pt).min(slide_width_pt),
         (rect.bottom_pt + cover_padding_pt).min(slide_height_pt),
     );
+    // 推定した字幅で中央揃えの枠が原稿の位置から離れる場合、元の観測幅に収める。
+    // PowerPoint に幅だけを合わせてもらい、元の左端と隣の図を侵食しないようにする。
+    let constrain_center = !bounded
+        && !is_rotated
+        && alignment == Align::Center
+        && needed_width_pt > box_width_pt + 20.0
+        && (rect.left_pt < left - 20.0 || rect.right_pt > right + 20.0);
     let rect = if bounded {
         Rect::ltrb(
             left.max(0.0),
             rect.top_pt,
             right.min(slide_width_pt),
+            rect.bottom_pt,
+        )
+    } else if constrain_center {
+        let pad = (font_size_pt * 0.2).clamp(4.0, 8.0);
+        Rect::ltrb(
+            (left - pad).max(0.0),
+            rect.top_pt,
+            (right + pad).min(slide_width_pt),
             rect.bottom_pt,
         )
     } else {
@@ -758,7 +773,7 @@ fn text_box_for(
     if let Some(ea) = east_asian_font {
         text_box = text_box.east_asian_font(ea);
     }
-    if text_autofit || bounded {
+    if text_autofit || bounded || constrain_center {
         text_box = text_box.autofit(AutoFit::Normal);
     }
     if is_rotated {
