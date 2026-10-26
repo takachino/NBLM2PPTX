@@ -2217,6 +2217,7 @@ dependencies = [
  "n2p-image",
  "n2p-layout",
  "n2p-ooxml",
+ "serde",
  "thiserror 2.0.21",
 ]
 

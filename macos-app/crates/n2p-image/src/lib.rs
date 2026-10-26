@@ -31,6 +31,7 @@ pub mod objects;
 mod onnx_pb;
 pub mod runtime;
 pub mod sam;
+pub mod text_inpaint;
 pub mod textmask;
 pub mod transform;
 pub mod watermark;

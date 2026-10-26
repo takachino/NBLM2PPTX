@@ -182,6 +182,8 @@ pub struct VisionDocument {
     pages: Vec<LayoutPage>,
     /// 每頁被丟棄的低信心度觀測數，方便診斷「為什麼這頁字很少」。
     dropped: Vec<usize>,
+    /// フィルター前の OCR 観測。診断用に保持する。
+    observations: Vec<Vec<Observation>>,
 }
 
 impl VisionDocument {
@@ -202,6 +204,7 @@ impl VisionDocument {
 
         let mut pages = Vec::with_capacity(images.len());
         let mut dropped = Vec::with_capacity(images.len());
+        let mut raw_observations = Vec::with_capacity(images.len());
 
         for (index, image) in images.iter().enumerate() {
             let size_pt = page_sizes_pt
@@ -209,6 +212,7 @@ impl VisionDocument {
                 .copied()
                 .unwrap_or((image.width as f64, image.height as f64));
             let observations = recognize(image, config)?;
+            raw_observations.push(observations.clone());
             let total = observations.len();
             let kept: Vec<Observation> = observations
                 .into_iter()
@@ -226,11 +230,19 @@ impl VisionDocument {
             pages.push(LayoutPage { size_pt, blocks });
         }
 
-        Ok(Self { pages, dropped })
+        Ok(Self {
+            pages,
+            dropped,
+            observations: raw_observations,
+        })
     }
 
     pub fn dropped(&self) -> &[usize] {
         &self.dropped
+    }
+
+    pub fn observations(&self) -> &[Vec<Observation>] {
+        &self.observations
     }
 }
 

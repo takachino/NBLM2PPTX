@@ -13,3 +13,4 @@ n2p-image = { path = "../n2p-image" }
 n2p-layout = { path = "../n2p-layout" }
 n2p-ooxml = { path = "../n2p-ooxml" }
 image.workspace = true
+serde.workspace = true
