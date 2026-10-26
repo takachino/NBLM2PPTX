@@ -63,11 +63,13 @@ PowerPoint の標準読み取り確認は 14 ページ、240 文字枠で通過�
 
 `archive/quality/p2-ocr-placement/validation.json`、`revised-powerpoint-bounds.json`、`revised-powerpoint-readback.json` に検証結果を保存した。
 同じ場所の `background-comparison.png` は文字を重ねる前の背景の比較であり、PPTX の完成表示の比較ではない。
-完成表示のユーザーによる目視確認は未実施。
+2026-10-27 にユーザーが `archive/quality/p2-ocr-placement/revised.pptx` の見え方を確認し、問題なしと報告した。
+今回の OCR 2 箇所、観測行ごとの配置、記号横の文字サイズ、柱ラベルの保持は目視確認済みとする。
 
 ## 残る制約
 
 OCR の補正は候補の曖昧さと画像の裏付けがある場合に限る。
 9 ページの低信頼度の `Unlwerk` など、今回の採用条件で確定できない認識は残る。
 フォントそのものの違い、文字単位の強調、任意の透視変形の編集可能な再現は対象外。
-P2 全体の完了とは扱わず、今回の目視確認と残る認識箇所の評価を次の段階に残す。
+今回の追加修正は確認済みとして完了とする。
+P2 全体の完了とは扱わず、残る認識箇所と書式の差の評価を次の段階に残す。
