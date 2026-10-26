@@ -35,6 +35,7 @@ pub struct PageDiagnosticReport {
     pub lama_status: String,
     pub preserved_text: Vec<crate::PreservedText>,
     pub protected_boxes_pt: Vec<[i64; 4]>,
+    pub placement_regions: Vec<PlacementBoundaryDiagnostic>,
 }
 
 #[derive(Serialize)]
@@ -65,6 +66,25 @@ pub struct OutputTextDiagnostic {
     pub latin_font: String,
     pub east_asian_font: Option<String>,
     pub emphasis_runs: Vec<(String, bool)>,
+    pub placement: Option<PlacementDiagnostic>,
+}
+
+#[derive(Serialize)]
+pub struct PlacementBoundaryDiagnostic {
+    pub kind: &'static str,
+    pub confidence_milli: u16,
+    /// レイアウトの pt。画像の px ではない。
+    pub bbox_pt: [i64; 4],
+    pub slide_rect_pt: [f64; 4],
+}
+
+#[derive(Serialize)]
+pub struct PlacementDiagnostic {
+    pub source_bbox_pt: [i64; 4],
+    pub boundaries: Vec<PlacementBoundaryDiagnostic>,
+    pub original_rect_pt: [f64; 4],
+    pub original_font_size_pt: f64,
+    pub allowed_rect_pt: [f64; 4],
 }
 
 #[derive(Serialize)]

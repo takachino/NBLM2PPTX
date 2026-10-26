@@ -29,6 +29,7 @@ pub mod method;
 pub mod models;
 pub mod objects;
 mod onnx_pb;
+pub mod rectangles;
 pub mod runtime;
 pub mod sam;
 pub mod text_inpaint;
