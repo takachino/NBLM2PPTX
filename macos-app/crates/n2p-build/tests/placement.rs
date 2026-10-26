@@ -32,7 +32,7 @@ fn observed_block(rows: &[(&str, BBox)]) -> Block {
     block
 }
 
-fn text_frame(block: Block) -> (n2p_ooxml::slide::TextBoxInfo, f64) {
+fn text_frames(block: Block) -> Vec<(n2p_ooxml::slide::TextBoxInfo, f64)> {
     let image = RgbImage::filled(1376, 768, [245; 3]);
     let layout = LayoutPage {
         size_pt: (1376.0, 768.0),
@@ -50,22 +50,19 @@ fn text_frame(block: Block) -> (n2p_ooxml::slide::TextBoxInfo, f64) {
     )
     .unwrap();
     let slide = deck.slide(0).unwrap();
-    let size = slide
+    let sizes: Vec<f64> = slide
         .root
         .path(&["p:cSld", "p:spTree"])
         .unwrap()
         .elements("p:sp")
-        .find_map(|sp| sp.path(&["p:txBody", "a:p", "a:r", "a:rPr"]))
+        .filter_map(|sp| sp.path(&["p:txBody", "a:p", "a:r", "a:rPr"]))
+        .map(|r| r.get_attr("sz").unwrap().parse::<f64>().unwrap() / 100.0)
+        .collect();
+    n2p_ooxml::slide::text_shapes(&slide)
         .unwrap()
-        .get_attr("sz")
-        .unwrap()
-        .parse::<f64>()
-        .unwrap()
-        / 100.0;
-    (
-        n2p_ooxml::slide::text_shapes(&slide).unwrap().remove(0),
-        size,
-    )
+        .into_iter()
+        .zip(sizes)
+        .collect()
 }
 
 #[test]
@@ -80,7 +77,7 @@ fn long_two_line_footer_keeps_its_original_horizontal_bounds() {
             BBox::new(118, 726, 1254, 765),
         ),
     ]);
-    let (shape, font_size) = text_frame(block);
+    let (shape, font_size) = text_frames(block).remove(0);
     let left = shape.x_emu as f64 / 12700.0;
     let right = (shape.x_emu + shape.cx_emu) as f64 / 12700.0;
     assert!(left >= 60.0, "文字枠が左端へ広がった: {left}");
@@ -97,11 +94,50 @@ fn broad_title_does_not_shift_to_the_slide_edge() {
         "Lightning Experience ： ワークスペースの解剖図",
         BBox::new(35, 27, 907, 75),
     )]);
-    let (shape, font_size) = text_frame(block);
+    let (shape, font_size) = text_frames(block).remove(0);
     let left = shape.x_emu as f64 / 12700.0;
     assert!(left >= 15.0, "原稿の左端より離れている: {left}");
     assert!(
         font_size <= 27.0,
         "タイトルの文字が枠幅を超える: {font_size}"
     );
+}
+
+#[test]
+fn observed_body_lines_keep_their_own_positions_and_widths() {
+    let rows = [
+        ("説明の見出し Heading", BBox::new(100, 100, 400, 130)),
+        (
+            "行間を維持する長い説明の本文",
+            BBox::new(100, 140, 510, 162),
+        ),
+        ("短い最終行", BBox::new(100, 170, 230, 192)),
+    ];
+    let frames = text_frames(observed_block(&rows));
+    assert_eq!(
+        frames.len(),
+        rows.len(),
+        "観測行を一つの固定行間へ押し込んでいる"
+    );
+    let scale = 960.0 / 1376.0;
+    for ((frame, size), (text, bbox)) in frames.iter().zip(rows) {
+        assert_eq!(frame.text, text);
+        assert!((frame.x_emu as f64 / 12700.0 - bbox.left as f64 * scale).abs() < 1.0);
+        let center = (frame.y_emu as f64 + frame.cy_emu as f64 / 2.0) / 12700.0;
+        assert!((center - (bbox.top + bbox.bottom) as f64 / 2.0 * scale - 2.0).abs() < 1.0);
+        assert!(*size <= 22.0, "短い行が拡大された: {size}");
+        assert!(frame.cx_emu as f64 / 12700.0 <= bbox.width() as f64 * scale + 1.0);
+    }
+}
+
+#[test]
+fn unobserved_paragraph_remains_one_editable_shape() {
+    let mut block = observed_block(&[
+        ("長い説明の一行目", BBox::new(100, 100, 400, 125)),
+        ("短い二行目", BBox::new(100, 135, 230, 160)),
+    ]);
+    for line in &mut block.lines {
+        line.observation_bbox = None;
+    }
+    assert_eq!(text_frames(block).len(), 1);
 }

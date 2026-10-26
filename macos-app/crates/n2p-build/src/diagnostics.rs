@@ -52,6 +52,16 @@ pub struct TextDiagnostic {
     pub decision: &'static str,
     pub color: Option<[u8; 3]>,
     pub density: Option<f64>,
+    pub output_text_boxes: Vec<OutputTextDiagnostic>,
+}
+
+#[derive(Serialize)]
+pub struct OutputTextDiagnostic {
+    pub text: String,
+    pub rect_pt: [f64; 4],
+    pub font_size_pt: f64,
+    pub bold: bool,
+    pub color: [u8; 3],
 }
 
 #[derive(Serialize)]

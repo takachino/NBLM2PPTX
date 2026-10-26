@@ -418,6 +418,7 @@ fn build_page(
                 decision: "skip-empty-or-watermark",
                 color: None,
                 density: None,
+                output_text_boxes: Vec::new(),
             });
         }
         // 文字區域分析：Otsu ∪ 自適應求筆畫遮罩，同時取得文字色與字重。
@@ -454,20 +455,56 @@ fn build_page(
             continue;
         };
         let text_box = text_box.bold(analysis.is_bold);
-        let text_box = if options.text_mode == TextMode::Overlay {
-            // 疊加式：文字全透明，背景不動
-            text_box.text_alpha(0)
-        } else if options.text_mode == TextMode::Cover {
-            // 取文字框外圍的顏色當底色 —— 那一圈基本上是背景
-            let pad_px =
-                (text_box.font_size_pt / scale.max(f64::EPSILON) * image_scale * 0.35) as i64 + 3;
-            let fill = background_color(input.image, text_region.scale(image_scale), pad_px);
-            text_box.fill(fill)
+        let boxes = if !planned.bounded {
+            observed_line_boxes(
+                block,
+                &text_box,
+                text_region,
+                input.image,
+                scale,
+                image_scale,
+            )
+            .unwrap_or_else(|| vec![text_box])
         } else {
-            text_box
+            vec![text_box]
         };
-        deck.push_text_box(index, &text_box).map_err(Error::Ooxml)?;
-        report.text_boxes += 1;
+        for text_box in boxes {
+            let text_box = if options.text_mode == TextMode::Overlay {
+                // 疊加式：文字全透明，背景不動
+                text_box.text_alpha(0)
+            } else if options.text_mode == TextMode::Cover {
+                // 取文字框外圍的顏色當底色 —— 那一圈基本上是背景
+                let pad_px = (text_box.font_size_pt / scale.max(f64::EPSILON) * image_scale * 0.35)
+                    as i64
+                    + 3;
+                let fill = background_color(input.image, text_region.scale(image_scale), pad_px);
+                text_box.fill(fill)
+            } else {
+                text_box
+            };
+            deck.push_text_box(index, &text_box).map_err(Error::Ooxml)?;
+            report.text_boxes += 1;
+            if let Some(diagnostics) = &mut diagnostics {
+                diagnostics
+                    .report
+                    .text_blocks
+                    .last_mut()
+                    .unwrap()
+                    .output_text_boxes
+                    .push(diagnostics::OutputTextDiagnostic {
+                        text: text_box.text.clone(),
+                        rect_pt: [
+                            text_box.rect.left_pt,
+                            text_box.rect.top_pt,
+                            text_box.rect.right_pt,
+                            text_box.rect.bottom_pt,
+                        ],
+                        font_size_pt: text_box.font_size_pt,
+                        bold: text_box.bold,
+                        color: text_box.color_rgb,
+                    });
+            }
+        }
         if let Some(diagnostics) = &mut diagnostics {
             diagnostics.report.text_blocks.last_mut().unwrap().decision = "editable-text";
         }
@@ -582,6 +619,71 @@ fn build_page(
 
 /// 由區塊產生文字框；跳過空白與 NotebookLM 頁尾水印。
 /// 產生文字框所需的環境資訊（避免參數列過長）。
+/// 左揃えの OCR 段落は、各行の実測位置と局所的な書式を保持する。
+/// 中央揃えのフッター、回転文字、観測情報のない provider は従来の段落を使う。
+fn observed_line_boxes(
+    block: &Block,
+    base: &TextBox,
+    region: BBox,
+    image: &RgbImage,
+    scale: f64,
+    image_scale: f64,
+) -> Option<Vec<TextBox>> {
+    if block.lines.len() < 2
+        || base.align != Align::Left
+        || block.rotation_mdeg.abs() >= 3_000
+        || block
+            .lines
+            .iter()
+            .any(|line| line.observation_bbox.is_none() || line.bbox.is_none())
+    {
+        return None;
+    }
+    block
+        .lines
+        .iter()
+        .map(|line| {
+            let bbox = line.bbox?;
+            let bbox = BBox::new(
+                bbox.left.max(region.left),
+                bbox.top.max(region.top),
+                bbox.right.min(region.right),
+                bbox.bottom.min(region.bottom),
+            );
+            if bbox.is_empty() {
+                return None;
+            }
+            let text = strip_leading_bullet(&line.text()).0.to_owned();
+            let units = fontsize::full_width_units(&text);
+            if units <= 0.0 {
+                return None;
+            }
+            let width = bbox.width() as f64 * scale;
+            let size = base.font_size_pt.min(width * 0.9 / units);
+            let cy = (bbox.top + bbox.bottom) as f64 * scale / 2.0 + TEXT_DELTA_Y_PT;
+            let height =
+                ((LINE_SPACING_RATIO + TEXT_SLACK_LINES) * size).max(bbox.height() as f64 * scale);
+            let analysis = n2p_image::textmask::analyze_with_line_height(
+                image,
+                bbox.scale(image_scale),
+                base.font_size_pt / scale.max(f64::EPSILON) * image_scale,
+            );
+            let mut text_box = base.clone();
+            text_box.text = text;
+            text_box.font_size_pt = size;
+            text_box.rect = Rect::ltrb(
+                bbox.left as f64 * scale,
+                cy - height / 2.0,
+                bbox.right as f64 * scale,
+                cy + height / 2.0,
+            );
+            text_box.bold = analysis.is_bold;
+            text_box.color_rgb = analysis.color;
+            Some(text_box)
+        })
+        .collect()
+}
+
 struct TextEnv<'a> {
     scale: f64,
     slide_width_pt: f64,
@@ -761,9 +863,14 @@ fn text_box_for(
     };
 
     // 近似字幅と実際の太字・代替フォントの差を見込み、観測幅に 10% の余裕を残す。
-    // 枠を狭めた場合だけ適用し、既存の本文や記号保護のサイズは維持する。
-    let font_size_pt = if constrain_center && units > 0.0 {
-        font_size_pt.min(box_width_pt * 0.9 / units)
+    // 中央揃えの拡大を抑えた枠と、記号保護で制限した枠に適用する。
+    let font_size_pt = if (constrain_center || bounded) && units > 0.0 {
+        let available_width = if bounded {
+            rect.width_pt()
+        } else {
+            box_width_pt
+        };
+        font_size_pt.min(available_width * 0.9 / units)
     } else {
         font_size_pt
     };
@@ -1772,6 +1879,27 @@ mod tests {
     use super::*;
     use n2p_layout::{Line, Span};
 
+    #[test]
+    fn text_beside_a_protected_symbol_fits_without_powerpoint_autofit() {
+        let mut block = Block::new(BlockKind::Text, BBox::new(100, 100, 220, 140));
+        block.text = "変更不可 （X）".to_owned();
+        let env = TextEnv {
+            scale: 1.0,
+            slide_width_pt: 960.0,
+            slide_height_pt: 540.0,
+            latin_font: "Arial",
+            east_asian_font: None,
+            text_autofit: false,
+            text_mode: TextMode::Erase,
+            font_size_pt: Some(24.0),
+            bounded: true,
+        };
+        let text_box = text_box_for(&block, block.bbox, &env, [0; 3]).unwrap();
+        assert!(
+            text_box.font_size_pt * fontsize::full_width_units(&block.text)
+                <= text_box.rect.width_pt() * 0.91
+        );
+    }
     fn page() -> LayoutPage {
         LayoutPage {
             size_pt: (960.0, 540.0),

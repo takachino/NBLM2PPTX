@@ -17,6 +17,7 @@ pub enum PreservationReason {
     SmallUiText,
     UncertainGraphic,
     AdjacentGraphic,
+    PerspectiveText,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -925,15 +926,72 @@ fn bound_text_beside_graphics(plan: &mut ProtectionPlan, scale: f64) {
     }
 }
 
+/// 複数の面に沿って折れたラベルを、中央が下がる基線と異常な外接高さから判定する。
+fn bent_label(text: &str, foreground: &Foreground) -> bool {
+    let len = text.chars().count();
+    let width = foreground.width;
+    let height = foreground.bbox.height().max(0) as usize;
+    let units = crate::fontsize::full_width_units(text);
+    if !(5..=18).contains(&len)
+        || crate::fontsize::full_width_ratio(text) < 0.5
+        || units <= 0.0
+        || width < height * 5 / 2
+        || (height as f64) < width as f64 / units * 1.7
+    {
+        return false;
+    }
+    let mut bottoms: [Vec<usize>; 3] = std::array::from_fn(|_| Vec::new());
+    for x in 0..width {
+        let ys: Vec<usize> = (0..height)
+            .filter(|y| foreground.bits[y * width + x])
+            .collect();
+        if ys.len() >= 4 {
+            bottoms[(x * 3 / width).min(2)].push(*ys.last().unwrap());
+        }
+    }
+    if bottoms.iter().any(|values| values.len() < width / 12) {
+        return false;
+    }
+    let median: Vec<f64> = bottoms
+        .iter_mut()
+        .map(|values| {
+            values.sort_unstable();
+            values[values.len() / 2] as f64
+        })
+        .collect();
+    median[1] - median[0] > height as f64 * 0.14 && median[1] - median[2] > height as f64 * 0.14
+}
+
 pub(crate) fn plan(layout: &LayoutPage, image: &RgbImage, scale: f64) -> ProtectionPlan {
     let observations = observations(layout, scale);
     let ui_regions = small_ui_regions(&observations, image, layout.size_pt.0, scale);
     let image_scale = image.width as f64 / layout.size_pt.0;
+    let perspective_regions: Vec<BBox> = observations
+        .iter()
+        .filter(|o| {
+            o.block.rotation_mdeg.abs() < 3_000
+                && bent_label(
+                    &o.block.text,
+                    &Foreground::new(image, o.block.bbox.scale(image_scale)),
+                )
+        })
+        .map(|o| {
+            let bbox = o.block.bbox;
+            // 同じ面に続く欧文の副ラベルも画像に残す。
+            BBox::new(
+                bbox.left - 2,
+                bbox.top - 2,
+                bbox.right + 2,
+                bbox.bottom + bbox.height() * 3 / 4,
+            )
+        })
+        .collect();
     let mut plan = ProtectionPlan {
         editable: Vec::new(),
         preserved: Vec::new(),
         protected_boxes: ui_regions.clone(),
     };
+    plan.protected_boxes.extend(&perspective_regions);
     for (block_index, original) in layout.text_blocks().enumerate() {
         let rows: Vec<&Observation> = observations
             .iter()
@@ -942,7 +1000,18 @@ pub(crate) fn plan(layout: &LayoutPage, image: &RgbImage, scale: f64) -> Protect
         let mut pending = Vec::new();
         let before = plan.preserved.len();
         for observation in &rows {
-            if ui_regions
+            if perspective_regions
+                .iter()
+                .any(|region| intersects_most(*region, observation.block.bbox))
+            {
+                let bbox = expand(observation.block.bbox, 2);
+                plan.preserved.push(observation.preserve(
+                    observation.block.text.clone(),
+                    bbox,
+                    PreservationReason::PerspectiveText,
+                ));
+                plan.protected_boxes.push(bbox);
+            } else if ui_regions
                 .iter()
                 .any(|region| intersects_most(*region, observation.block.bbox))
             {
