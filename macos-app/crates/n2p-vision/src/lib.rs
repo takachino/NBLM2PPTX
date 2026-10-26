@@ -26,6 +26,20 @@ use n2p_layout::{
 
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(any(target_os = "macos", test))]
+mod refinement;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextCandidate {
+    pub text: String,
+    pub confidence: f32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextRefinement {
+    pub original_text: String,
+    pub reason: &'static str,
+}
 
 /// 一筆辨識結果。
 #[derive(Debug, Clone, PartialEq)]
@@ -37,6 +51,8 @@ pub struct Observation {
     pub bbox_norm: (f64, f64, f64, f64),
     /// 旋轉文字的四個正規化頂點 `[top_left, top_right, bottom_right, bottom_left]`（原點左上、y 向下）。
     pub corners_norm: Option<[(f64, f64); 4]>,
+    pub candidates: Vec<TextCandidate>,
+    pub refinement: Option<TextRefinement>,
 }
 
 /// 預設支援的 OCR 辨識語言（對應本專案支援的六種語言）。
@@ -494,6 +510,8 @@ mod tests {
             confidence: 0.9,
             bbox_norm: (x, y, w, h),
             corners_norm: None,
+            candidates: Vec::new(),
+            refinement: None,
         }
     }
 
