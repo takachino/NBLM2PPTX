@@ -735,7 +735,7 @@ fn text_box_for(
         (rect.bottom_pt + cover_padding_pt).min(slide_height_pt),
     );
     // 推定した字幅で中央揃えの枠が原稿の位置から離れる場合、元の観測幅に収める。
-    // PowerPoint に幅だけを合わせてもらい、元の左端と隣の図を侵食しないようにする。
+    // 自動収縮だけでは初回表示で文字がはみ出すため、後段で文字サイズも制限する。
     let constrain_center = !bounded
         && !is_rotated
         && alignment == Align::Center
@@ -760,6 +760,13 @@ fn text_box_for(
         rect
     };
 
+    // 近似字幅と実際の太字・代替フォントの差を見込み、観測幅に 10% の余裕を残す。
+    // 枠を狭めた場合だけ適用し、既存の本文や記号保護のサイズは維持する。
+    let font_size_pt = if constrain_center && units > 0.0 {
+        font_size_pt.min(box_width_pt * 0.9 / units)
+    } else {
+        font_size_pt
+    };
     let mut text_box = TextBox::new(
         format!("Block_{}", block.kind.label()),
         strip_leading_bullet(&block.text).0.to_owned(),

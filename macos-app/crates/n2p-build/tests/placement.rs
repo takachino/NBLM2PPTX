@@ -32,7 +32,7 @@ fn observed_block(rows: &[(&str, BBox)]) -> Block {
     block
 }
 
-fn text_frame(block: Block) -> n2p_ooxml::slide::TextBoxInfo {
+fn text_frame(block: Block) -> (n2p_ooxml::slide::TextBoxInfo, f64) {
     let image = RgbImage::filled(1376, 768, [245; 3]);
     let layout = LayoutPage {
         size_pt: (1376.0, 768.0),
@@ -49,9 +49,23 @@ fn text_frame(block: Block) -> n2p_ooxml::slide::TextBoxInfo {
         },
     )
     .unwrap();
-    n2p_ooxml::slide::text_shapes(&deck.slide(0).unwrap())
+    let slide = deck.slide(0).unwrap();
+    let size = slide
+        .root
+        .path(&["p:cSld", "p:spTree"])
         .unwrap()
-        .remove(0)
+        .elements("p:sp")
+        .find_map(|sp| sp.path(&["p:txBody", "a:p", "a:r", "a:rPr"]))
+        .unwrap()
+        .get_attr("sz")
+        .unwrap()
+        .parse::<f64>()
+        .unwrap()
+        / 100.0;
+    (
+        n2p_ooxml::slide::text_shapes(&slide).unwrap().remove(0),
+        size,
+    )
 }
 
 #[test]
@@ -66,11 +80,15 @@ fn long_two_line_footer_keeps_its_original_horizontal_bounds() {
             BBox::new(118, 726, 1254, 765),
         ),
     ]);
-    let shape = text_frame(block);
+    let (shape, font_size) = text_frame(block);
     let left = shape.x_emu as f64 / 12700.0;
     let right = (shape.x_emu + shape.cx_emu) as f64 / 12700.0;
     assert!(left >= 60.0, "文字枠が左端へ広がった: {left}");
     assert!(right <= 900.0, "文字枠が右端へ広がった: {right}");
+    assert!(
+        font_size <= 19.0,
+        "フッターの文字が枠幅を超える: {font_size}"
+    );
 }
 
 #[test]
@@ -79,7 +97,11 @@ fn broad_title_does_not_shift_to_the_slide_edge() {
         "Lightning Experience ： ワークスペースの解剖図",
         BBox::new(35, 27, 907, 75),
     )]);
-    let shape = text_frame(block);
+    let (shape, font_size) = text_frame(block);
     let left = shape.x_emu as f64 / 12700.0;
     assert!(left >= 15.0, "原稿の左端より離れている: {left}");
+    assert!(
+        font_size <= 27.0,
+        "タイトルの文字が枠幅を超える: {font_size}"
+    );
 }
