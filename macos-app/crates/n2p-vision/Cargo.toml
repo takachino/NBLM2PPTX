@@ -18,3 +18,4 @@ block2.workspace = true
 thiserror.workspace = true
 n2p-core = { path = "../n2p-core" }
 n2p-layout = { path = "../n2p-layout" }
+strsim.workspace = true

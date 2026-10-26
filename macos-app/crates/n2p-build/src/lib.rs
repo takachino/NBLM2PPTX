@@ -25,6 +25,7 @@ pub mod diagnostics;
 pub mod fonts;
 pub mod fontsize;
 mod protection;
+mod typography;
 
 pub use protection::{PreservationReason, PreservedText};
 
@@ -311,6 +312,7 @@ pub fn build_deck_with_diagnostics(
         pages: Vec::with_capacity(inputs.len()),
         slide_size,
     };
+    let typography = typography::FontCatalog::load(&latin, options.font_name == AUTO_FONT);
 
     for (index, input) in inputs.iter().enumerate() {
         if !progress(index) {
@@ -328,6 +330,7 @@ pub fn build_deck_with_diagnostics(
             options,
             east_asian.as_deref(),
             &latin,
+            &typography,
             diagnostics.as_mut(),
         )?;
         if let (Some(sink), Some(diagnostics)) = (&mut sink, &diagnostics) {
@@ -349,6 +352,7 @@ fn build_page(
     options: &BuildOptions,
     east_asian_font: Option<&str>,
     latin_font: &str,
+    typography: &typography::FontCatalog,
     mut diagnostics: Option<&mut PageDiagnostics>,
 ) -> Result<PageReport> {
     let layout = input.layout;
@@ -418,6 +422,7 @@ fn build_page(
                 decision: "skip-empty-or-watermark",
                 color: None,
                 density: None,
+                output_text_boxes: Vec::new(),
             });
         }
         // 文字區域分析：Otsu ∪ 自適應求筆畫遮罩，同時取得文字色與字重。
@@ -454,20 +459,93 @@ fn build_page(
             continue;
         };
         let text_box = text_box.bold(analysis.is_bold);
-        let text_box = if options.text_mode == TextMode::Overlay {
-            // 疊加式：文字全透明，背景不動
-            text_box.text_alpha(0)
-        } else if options.text_mode == TextMode::Cover {
-            // 取文字框外圍的顏色當底色 —— 那一圈基本上是背景
-            let pad_px =
-                (text_box.font_size_pt / scale.max(f64::EPSILON) * image_scale * 0.35) as i64 + 3;
-            let fill = background_color(input.image, text_region.scale(image_scale), pad_px);
-            text_box.fill(fill)
+        let boxes = if !planned.bounded {
+            observed_line_boxes(
+                block,
+                &text_box,
+                text_region,
+                input.image,
+                scale,
+                image_scale,
+            )
+            .unwrap_or_else(|| vec![text_box])
         } else {
-            text_box
+            vec![text_box]
         };
-        deck.push_text_box(index, &text_box).map_err(Error::Ooxml)?;
-        report.text_boxes += 1;
+        let split = boxes.len() > 1;
+        for (line_index, mut text_box) in boxes.into_iter().enumerate() {
+            let source = if split {
+                block.lines[line_index].bbox.unwrap_or(text_region)
+            } else {
+                text_region
+            };
+            let continuation = if split {
+                block
+                    .lines
+                    .get(line_index + 1)
+                    .and_then(|line| line.bbox.map(|bbox| (line.text(), bbox.scale(image_scale))))
+            } else {
+                None
+            };
+            let confidence = block
+                .lines
+                .get(if split { line_index } else { 0 })
+                .and_then(|line| line.confidence_milli);
+            if confidence.is_none_or(|value| value >= 800) {
+                typography.apply(
+                    &mut text_box,
+                    input.image,
+                    source.scale(image_scale),
+                    scale,
+                    image_scale,
+                    continuation
+                        .as_ref()
+                        .map(|(text, bbox)| (text.as_str(), *bbox)),
+                );
+            }
+            let text_box = if options.text_mode == TextMode::Overlay {
+                // 疊加式：文字全透明，背景不動
+                text_box.text_alpha(0)
+            } else if options.text_mode == TextMode::Cover {
+                // 取文字框外圍的顏色當底色 —— 那一圈基本上是背景
+                let pad_px = (text_box.font_size_pt / scale.max(f64::EPSILON) * image_scale * 0.35)
+                    as i64
+                    + 3;
+                let fill = background_color(input.image, text_region.scale(image_scale), pad_px);
+                text_box.fill(fill)
+            } else {
+                text_box
+            };
+            deck.push_text_box(index, &text_box).map_err(Error::Ooxml)?;
+            report.text_boxes += 1;
+            if let Some(diagnostics) = &mut diagnostics {
+                diagnostics
+                    .report
+                    .text_blocks
+                    .last_mut()
+                    .unwrap()
+                    .output_text_boxes
+                    .push(diagnostics::OutputTextDiagnostic {
+                        text: text_box.text.clone(),
+                        rect_pt: [
+                            text_box.rect.left_pt,
+                            text_box.rect.top_pt,
+                            text_box.rect.right_pt,
+                            text_box.rect.bottom_pt,
+                        ],
+                        font_size_pt: text_box.font_size_pt,
+                        bold: text_box.bold,
+                        color: text_box.color_rgb,
+                        latin_font: text_box.font_family.clone(),
+                        east_asian_font: text_box.east_asian_font_family.clone(),
+                        emphasis_runs: text_box
+                            .styled_runs
+                            .iter()
+                            .map(|r| (r.text.clone(), r.bold))
+                            .collect(),
+                    });
+            }
+        }
         if let Some(diagnostics) = &mut diagnostics {
             diagnostics.report.text_blocks.last_mut().unwrap().decision = "editable-text";
         }
@@ -582,6 +660,71 @@ fn build_page(
 
 /// 由區塊產生文字框；跳過空白與 NotebookLM 頁尾水印。
 /// 產生文字框所需的環境資訊（避免參數列過長）。
+/// 左揃えの OCR 段落は、各行の実測位置と局所的な書式を保持する。
+/// 中央揃えのフッター、回転文字、観測情報のない provider は従来の段落を使う。
+fn observed_line_boxes(
+    block: &Block,
+    base: &TextBox,
+    region: BBox,
+    image: &RgbImage,
+    scale: f64,
+    image_scale: f64,
+) -> Option<Vec<TextBox>> {
+    if block.lines.len() < 2
+        || base.align != Align::Left
+        || block.rotation_mdeg.abs() >= 3_000
+        || block
+            .lines
+            .iter()
+            .any(|line| line.observation_bbox.is_none() || line.bbox.is_none())
+    {
+        return None;
+    }
+    block
+        .lines
+        .iter()
+        .map(|line| {
+            let bbox = line.bbox?;
+            let bbox = BBox::new(
+                bbox.left.max(region.left),
+                bbox.top.max(region.top),
+                bbox.right.min(region.right),
+                bbox.bottom.min(region.bottom),
+            );
+            if bbox.is_empty() {
+                return None;
+            }
+            let text = strip_leading_bullet(&line.text()).0.to_owned();
+            let units = fontsize::full_width_units(&text);
+            if units <= 0.0 {
+                return None;
+            }
+            let width = bbox.width() as f64 * scale;
+            let size = base.font_size_pt.min(width * 0.9 / units);
+            let cy = (bbox.top + bbox.bottom) as f64 * scale / 2.0 + TEXT_DELTA_Y_PT;
+            let height =
+                ((LINE_SPACING_RATIO + TEXT_SLACK_LINES) * size).max(bbox.height() as f64 * scale);
+            let analysis = n2p_image::textmask::analyze_with_line_height(
+                image,
+                bbox.scale(image_scale),
+                base.font_size_pt / scale.max(f64::EPSILON) * image_scale,
+            );
+            let mut text_box = base.clone();
+            text_box.text = text;
+            text_box.font_size_pt = size;
+            text_box.rect = Rect::ltrb(
+                bbox.left as f64 * scale,
+                cy - height / 2.0,
+                bbox.right as f64 * scale,
+                cy + height / 2.0,
+            );
+            text_box.bold = analysis.is_bold;
+            text_box.color_rgb = analysis.color;
+            Some(text_box)
+        })
+        .collect()
+}
+
 struct TextEnv<'a> {
     scale: f64,
     slide_width_pt: f64,
@@ -734,6 +877,13 @@ fn text_box_for(
         (rect.right_pt + cover_padding_pt).min(slide_width_pt),
         (rect.bottom_pt + cover_padding_pt).min(slide_height_pt),
     );
+    // 推定した字幅で中央揃えの枠が原稿の位置から離れる場合、元の観測幅に収める。
+    // 自動収縮だけでは初回表示で文字がはみ出すため、後段で文字サイズも制限する。
+    let constrain_center = !bounded
+        && !is_rotated
+        && alignment == Align::Center
+        && needed_width_pt > box_width_pt + 20.0
+        && (rect.left_pt < left - 20.0 || rect.right_pt > right + 20.0);
     let rect = if bounded {
         Rect::ltrb(
             left.max(0.0),
@@ -741,10 +891,30 @@ fn text_box_for(
             right.min(slide_width_pt),
             rect.bottom_pt,
         )
+    } else if constrain_center {
+        let pad = (font_size_pt * 0.2).clamp(4.0, 8.0);
+        Rect::ltrb(
+            (left - pad).max(0.0),
+            rect.top_pt,
+            (right + pad).min(slide_width_pt),
+            rect.bottom_pt,
+        )
     } else {
         rect
     };
 
+    // 近似字幅と実際の太字・代替フォントの差を見込み、観測幅に 10% の余裕を残す。
+    // 中央揃えの拡大を抑えた枠と、記号保護で制限した枠に適用する。
+    let font_size_pt = if (constrain_center || bounded) && units > 0.0 {
+        let available_width = if bounded {
+            rect.width_pt()
+        } else {
+            box_width_pt
+        };
+        font_size_pt.min(available_width * 0.9 / units)
+    } else {
+        font_size_pt
+    };
     let mut text_box = TextBox::new(
         format!("Block_{}", block.kind.label()),
         strip_leading_bullet(&block.text).0.to_owned(),
@@ -758,7 +928,7 @@ fn text_box_for(
     if let Some(ea) = east_asian_font {
         text_box = text_box.east_asian_font(ea);
     }
-    if text_autofit || bounded {
+    if text_autofit || bounded || constrain_center {
         text_box = text_box.autofit(AutoFit::Normal);
     }
     if is_rotated {
@@ -1750,6 +1920,27 @@ mod tests {
     use super::*;
     use n2p_layout::{Line, Span};
 
+    #[test]
+    fn text_beside_a_protected_symbol_fits_without_powerpoint_autofit() {
+        let mut block = Block::new(BlockKind::Text, BBox::new(100, 100, 220, 140));
+        block.text = "変更不可 （X）".to_owned();
+        let env = TextEnv {
+            scale: 1.0,
+            slide_width_pt: 960.0,
+            slide_height_pt: 540.0,
+            latin_font: "Arial",
+            east_asian_font: None,
+            text_autofit: false,
+            text_mode: TextMode::Erase,
+            font_size_pt: Some(24.0),
+            bounded: true,
+        };
+        let text_box = text_box_for(&block, block.bbox, &env, [0; 3]).unwrap();
+        assert!(
+            text_box.font_size_pt * fontsize::full_width_units(&block.text)
+                <= text_box.rect.width_pt() * 0.91
+        );
+    }
     fn page() -> LayoutPage {
         LayoutPage {
             size_pt: (960.0, 540.0),

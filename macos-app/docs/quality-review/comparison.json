@@ -1,0 +1,46 @@
+{
+  "revisions": {
+    "before_p0": "dc8230b",
+    "p0": "016470e",
+    "p1": "505b5f3",
+    "p2": "17a73b5"
+  },
+  "p0": {
+    "bright_pixels_before": 8640,
+    "bright_pixels_after": 0,
+    "region_px": [
+      0,
+      120,
+      240,
+      160
+    ]
+  },
+  "p1": {
+    "icon_pixels_identical_to_source": true,
+    "before_texts": [
+      "000",
+      "Contact"
+    ],
+    "after_texts": [
+      "Contact"
+    ]
+  },
+  "p2": {
+    "before": {
+      "left": 0.0,
+      "top": 4.681417322834646,
+      "right": 686.3246456692914,
+      "bottom": 70.48141732283464,
+      "font_size": 36.0
+    },
+    "after": {
+      "left": 17.218582677165355,
+      "top": 4.681417322834646,
+      "right": 639.9907086614173,
+      "bottom": 70.48141732283464,
+      "font_size": 28.76
+    },
+    "observed_left_pt": 24.41860465116279,
+    "observed_right_pt": 632.7906976744187
+  }
+}

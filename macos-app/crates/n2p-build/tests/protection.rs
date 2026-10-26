@@ -17,6 +17,44 @@ fn block(text: &str, bbox: BBox) -> Block {
     block
 }
 
+#[test]
+fn label_bent_across_two_faces_remains_in_the_source_image() {
+    let mut image = RgbImage::filled(960, 540, [245; 3]);
+    let bbox = BBox::new(100, 100, 280, 160);
+    for (i, offset) in [0, 14, 28, 28, 14, 0].iter().enumerate() {
+        for y in 100 + offset..120 + offset {
+            for x in 102 + i * 30..122 + i * 30 {
+                image.set_pixel(x as u32, y, [20, 90, 70]);
+            }
+        }
+    }
+    let (after, texts) = convert(&image, vec![block("標準構造の説明", bbox)]);
+    assert!(
+        texts.is_empty(),
+        "折れたラベルを水平な文字へ置換した: {texts:?}"
+    );
+    assert_eq!(after, image);
+}
+
+#[test]
+fn straight_label_and_ordinary_rotated_text_remain_editable() {
+    let mut image = RgbImage::filled(960, 540, [245; 3]);
+    let bbox = BBox::new(100, 100, 280, 160);
+    for i in 0..6 {
+        for y in 110..130 {
+            for x in 102 + i * 30..122 + i * 30 {
+                image.set_pixel(x, y, [20, 90, 70]);
+            }
+        }
+    }
+    let (_, texts) = convert(&image, vec![block("標準構造の説明", bbox)]);
+    assert_eq!(texts, vec!["標準構造の説明"]);
+    let mut rotated = block("標準構造の説明", bbox);
+    rotated.rotation_mdeg = 12000;
+    let (_, texts) = convert(&image, vec![rotated]);
+    assert_eq!(texts, vec!["標準構造の説明"]);
+}
+
 fn line(image: &mut RgbImage, from: (i64, i64), to: (i64, i64), radius: i64, color: [u8; 3]) {
     let steps = (to.0 - from.0).abs().max((to.1 - from.1).abs()).max(1);
     for step in 0..=steps {
