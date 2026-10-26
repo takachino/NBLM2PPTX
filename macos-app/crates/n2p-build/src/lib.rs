@@ -24,6 +24,7 @@
 pub mod diagnostics;
 pub mod fonts;
 pub mod fontsize;
+mod placement;
 mod protection;
 mod typography;
 
@@ -385,6 +386,17 @@ fn build_page(
             .collect();
     }
     let image_scale = input.image.width as f64 / layout.size_pt.0;
+    let placement = placement::PlacementMap::new(
+        layout,
+        input.image,
+        &plan.protected_boxes,
+        scale,
+        slide_width_pt,
+        slide_height_pt,
+    );
+    if let Some(diagnostics) = &mut diagnostics {
+        diagnostics.report.placement_regions = placement.diagnostics();
+    }
 
     // ── 1. 文字框 ──────────────────────────────────────────────────────────
     //
@@ -503,6 +515,7 @@ fn build_page(
                         .map(|(text, bbox)| (text.as_str(), *bbox)),
                 );
             }
+            let placement_result = placement.apply(source, block.rotation_mdeg, &mut text_box);
             let text_box = if options.text_mode == TextMode::Overlay {
                 // 疊加式：文字全透明，背景不動
                 text_box.text_alpha(0)
@@ -543,6 +556,7 @@ fn build_page(
                             .iter()
                             .map(|r| (r.text.clone(), r.bold))
                             .collect(),
+                        placement: placement_result,
                     });
             }
         }
@@ -1919,6 +1933,123 @@ pub fn blank_template() -> Result<Deck> {
 mod tests {
     use super::*;
     use n2p_layout::{Line, Span};
+
+    struct PlacementOutput {
+        text: String,
+        rect_pt: [f64; 4],
+        font_size_pt: f64,
+    }
+
+    fn constrained_outputs(image: &RgbImage, block: Block) -> Vec<PlacementOutput> {
+        let layout = LayoutPage {
+            size_pt: (960.0, 540.0),
+            blocks: vec![block],
+        };
+        let mut outputs = Vec::new();
+        build_deck_with_diagnostics(
+            &[PageInput {
+                layout: &layout,
+                image,
+            }],
+            &BuildOptions {
+                text_mode: TextMode::Overlay,
+                font_name: "Arial".into(),
+                ..Default::default()
+            },
+            &mut |_| true,
+            Some(&mut |_, diagnostics| {
+                // 診断を通して最終的に出力される枠と字級を検証する。
+                for entry in &diagnostics.report.text_blocks {
+                    for output in &entry.output_text_boxes {
+                        outputs.push(PlacementOutput {
+                            text: output.text.clone(),
+                            rect_pt: output.rect_pt,
+                            font_size_pt: output.font_size_pt,
+                        });
+                    }
+                }
+                Ok(())
+            }),
+        )
+        .unwrap();
+        outputs
+    }
+
+    fn draw_frame(image: &mut RgbImage, bbox: BBox, filled: bool) {
+        for y in bbox.top..bbox.bottom {
+            for x in bbox.left..bbox.right {
+                if filled
+                    || x < bbox.left + 2
+                    || x >= bbox.right - 2
+                    || y < bbox.top + 2
+                    || y >= bbox.bottom - 2
+                {
+                    image.set_pixel(x as u32, y as u32, [180, 200, 220]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rectangle_constraints_keep_cell_text_inside_its_border() {
+        let mut image = RgbImage::filled(960, 540, [255; 3]);
+        draw_frame(&mut image, BBox::new(40, 50, 205, 90), false);
+        let mut block = Block::new(BlockKind::Text, BBox::new(50, 58, 195, 82));
+        block.text = "Cell contents".into();
+        let outputs = constrained_outputs(&image, block);
+        assert_eq!(outputs.len(), 1);
+        let rect = outputs[0].rect_pt;
+        assert!(outputs[0].font_size_pt * LINE_PITCH_RATIO <= rect[3] - rect[1] + 0.01);
+        assert!(
+            rect[0] >= 42.0 && rect[1] >= 52.0 && rect[2] <= 203.0 && rect[3] <= 88.0,
+            "{rect:?}"
+        );
+    }
+
+    #[test]
+    fn rectangle_constraints_keep_observed_lines_inside_a_callout() {
+        let mut image = RgbImage::filled(960, 540, [255; 3]);
+        draw_frame(&mut image, BBox::new(40, 50, 230, 110), true);
+        let mut block = Block::new(BlockKind::Text, BBox::new(50, 58, 220, 102));
+        block.text = "A long description\nshort".into();
+        block.lines = [
+            ("A long description", BBox::new(50, 58, 220, 76)),
+            ("short", BBox::new(50, 84, 110, 102)),
+        ]
+        .into_iter()
+        .map(|(text, bbox)| Line {
+            spans: vec![Span {
+                text: Some(text.into()),
+                image_path: None,
+            }],
+            bbox: Some(bbox),
+            observation_bbox: Some(bbox),
+            confidence_milli: Some(950),
+        })
+        .collect();
+        let outputs = constrained_outputs(&image, block);
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(outputs[0].text, "A long description");
+        assert_eq!(outputs[1].text, "short");
+        for output in outputs {
+            assert!(
+                output.rect_pt[1] >= 52.0 && output.rect_pt[3] <= 108.0,
+                "{:?}",
+                output.rect_pt
+            );
+        }
+    }
+
+    #[test]
+    fn rectangle_constraints_keep_text_away_from_an_adjacent_shape() {
+        let mut image = RgbImage::filled(960, 540, [255; 3]);
+        draw_frame(&mut image, BBox::new(200, 50, 260, 100), true);
+        let mut block = Block::new(BlockKind::Text, BBox::new(50, 58, 195, 82));
+        block.text = "Adjacent text".into();
+        let outputs = constrained_outputs(&image, block);
+        assert_eq!(outputs.len(), 1);
+        assert!(outputs[0].rect_pt[2] <= 198.0, "{:?}", outputs[0].rect_pt);
+    }
 
     #[test]
     fn text_beside_a_protected_symbol_fits_without_powerpoint_autofit() {
