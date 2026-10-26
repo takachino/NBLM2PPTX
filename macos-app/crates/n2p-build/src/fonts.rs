@@ -132,8 +132,26 @@ fn font_dirs() -> Vec<PathBuf> {
     ];
     if let Some(home) = std::env::var_os("HOME") {
         dirs.push(Path::new(&home).join("Library/Fonts"));
+        dirs.push(Path::new(&home).join(".local/share/fonts"));
     }
+    if let Some(windir) = std::env::var_os("WINDIR") {
+        dirs.push(Path::new(&windir).join("Fonts"));
+    }
+    dirs.push(PathBuf::from("/usr/share/fonts/truetype/msttcorefonts"));
     dirs
+}
+
+pub(crate) fn font_files() -> Vec<PathBuf> {
+    font_dirs()
+        .into_iter()
+        .flat_map(|dir| {
+            std::fs::read_dir(dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path())
+        })
+        .collect()
 }
 
 /// 掃描字型目錄，回傳所有檔名（小寫）。

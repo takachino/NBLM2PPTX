@@ -62,6 +62,9 @@ pub struct OutputTextDiagnostic {
     pub font_size_pt: f64,
     pub bold: bool,
     pub color: [u8; 3],
+    pub latin_font: String,
+    pub east_asian_font: Option<String>,
+    pub emphasis_runs: Vec<(String, bool)>,
 }
 
 #[derive(Serialize)]

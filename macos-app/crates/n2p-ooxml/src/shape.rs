@@ -96,6 +96,13 @@ pub enum NewlineMode {
     Paragraph,
 }
 
+/// 同じ文字枠内で太字を切り替えるテキストの一部分。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextRun {
+    pub text: String,
+    pub bold: bool,
+}
+
 /// 一個矩形文字框的完整規格。
 #[derive(Debug, Clone)]
 pub struct TextBox {
@@ -132,6 +139,8 @@ pub struct TextBox {
     pub bold: bool,
     /// 順時針旋轉角度（度）。接近 0 時不寫入 `rot` 屬性。
     pub rotation_deg: f64,
+    /// 文字列全体と一致する場合だけ使う、文字単位の強調。
+    pub styled_runs: Vec<TextRun>,
 }
 
 impl Default for TextBox {
@@ -156,6 +165,7 @@ impl Default for TextBox {
             text_alpha: None,
             bold: false,
             rotation_deg: 0.0,
+            styled_runs: Vec::new(),
         }
     }
 }
@@ -253,25 +263,36 @@ impl TextBox {
             AutoFit::Shape => body_pr = body_pr.child(Element::new("a:spAutoFit")),
         }
 
-        let paragraphs = match self.newline {
-            NewlineMode::Literal => {
-                vec![self.build_paragraph_from_runs(vec![Patch::Text(&self.text)])]
-            }
-            NewlineMode::LineBreak => {
-                let mut runs = Vec::new();
-                for (index, line) in self.text.split('\n').enumerate() {
-                    if index > 0 {
-                        runs.push(Patch::Break);
-                    }
-                    runs.push(Patch::Text(line));
+        let paragraphs = if !self.styled_runs.is_empty()
+            && self
+                .styled_runs
+                .iter()
+                .map(|run| run.text.as_str())
+                .collect::<String>()
+                == self.text
+        {
+            self.build_styled_paragraphs()
+        } else {
+            match self.newline {
+                NewlineMode::Literal => {
+                    vec![self.build_paragraph_from_runs(vec![Patch::Text(&self.text)])]
                 }
-                vec![self.build_paragraph_from_runs(runs)]
+                NewlineMode::LineBreak => {
+                    let mut runs = Vec::new();
+                    for (index, line) in self.text.split('\n').enumerate() {
+                        if index > 0 {
+                            runs.push(Patch::Break);
+                        }
+                        runs.push(Patch::Text(line));
+                    }
+                    vec![self.build_paragraph_from_runs(runs)]
+                }
+                NewlineMode::Paragraph => self
+                    .text
+                    .split('\n')
+                    .map(|line| self.build_paragraph_from_runs(vec![Patch::Text(line)]))
+                    .collect(),
             }
-            NewlineMode::Paragraph => self
-                .text
-                .split('\n')
-                .map(|line| self.build_paragraph_from_runs(vec![Patch::Text(line)]))
-                .collect(),
         };
 
         let tx_body = Element::new("p:txBody")
@@ -342,12 +363,57 @@ impl TextBox {
     }
 
     fn build_run(&self, text: &str) -> Element {
+        self.build_run_with_bold(text, None)
+    }
+
+    fn build_styled_paragraphs(&self) -> Vec<Element> {
+        let paragraph =
+            || Element::new("a:p").child(Element::new("a:pPr").attr("algn", self.align.token()));
+        let mut paragraphs = vec![paragraph()];
+        for run in &self.styled_runs {
+            if self.newline == NewlineMode::Literal {
+                paragraphs
+                    .last_mut()
+                    .unwrap()
+                    .children
+                    .push(crate::xml::Node::Element(
+                        self.build_run_with_bold(&run.text, Some(run.bold)),
+                    ));
+                continue;
+            }
+            for (i, text) in run.text.split('\n').enumerate() {
+                if i > 0 {
+                    if self.newline == NewlineMode::Paragraph {
+                        paragraphs.push(paragraph());
+                    } else {
+                        paragraphs
+                            .last_mut()
+                            .unwrap()
+                            .children
+                            .push(crate::xml::Node::Element(Element::new("a:br")));
+                    }
+                }
+                if !text.is_empty() {
+                    paragraphs
+                        .last_mut()
+                        .unwrap()
+                        .children
+                        .push(crate::xml::Node::Element(
+                            self.build_run_with_bold(text, Some(run.bold)),
+                        ));
+                }
+            }
+        }
+        paragraphs
+    }
+
+    fn build_run_with_bold(&self, text: &str, bold: Option<bool>) -> Element {
         let mut r_pr = Element::new("a:rPr")
             .attr("lang", self.lang.as_str())
             .attr("sz", centipoint_from_pt(self.font_size_pt).to_string())
             .attr("dirty", "1");
-        if self.bold {
-            r_pr.set_attr("b", "1");
+        if self.bold || bold.is_some() {
+            r_pr.set_attr("b", if bold.unwrap_or(self.bold) { "1" } else { "0" });
         }
         let r_pr = r_pr
             .child(Element::new("a:solidFill").child({

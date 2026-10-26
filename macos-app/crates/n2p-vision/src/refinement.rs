@@ -4,6 +4,29 @@ use n2p_core::RgbImage;
 
 use crate::TextCandidate;
 
+pub(crate) fn retry_consensus(
+    original: &str,
+    confidence: f32,
+    first: &TextCandidate,
+    second: &TextCandidate,
+) -> Option<TextCandidate> {
+    let text = compact(&first.text);
+    let original = compact(original);
+    let improved = first.confidence.min(second.confidence);
+    if text.is_empty()
+        || text != compact(&second.text)
+        || improved < 0.9
+        || improved < confidence + 0.2
+        || strsim::levenshtein(&original, &text) > (original.chars().count() / 4).max(1)
+    {
+        return None;
+    }
+    Some(TextCandidate {
+        text: first.text.clone(),
+        confidence: improved,
+    })
+}
+
 fn compact(text: &str) -> String {
     text.chars().filter(|c| !c.is_whitespace()).collect()
 }
@@ -144,6 +167,57 @@ mod tests {
             text: text.into(),
             confidence,
         }
+    }
+
+    #[test]
+    fn adopts_a_small_correction_only_after_confident_multiscale_agreement() {
+        assert_eq!(
+            retry_consensus(
+                "のカスタムアプリ開。",
+                0.5,
+                &candidate("のカスタムアプリ開発。", 1.0),
+                &candidate("のカスタムアプリ開発。", 1.0)
+            ),
+            Some(candidate("のカスタムアプリ開発。", 1.0))
+        );
+        assert!(
+            retry_consensus(
+                "説明を税合する。",
+                0.5,
+                &candidate("説明を統合する。", 1.0),
+                &candidate("説明を統合する。", 1.0)
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn rejects_uncertain_disagreeing_or_unrelated_rerecognition() {
+        for (a, b) in [
+            (
+                candidate("のカスタムアプリ開発。", 0.5),
+                candidate("のカスタムアプリ開発。", 0.5),
+            ),
+            (
+                candidate("のカスタムアプリ開発。", 1.0),
+                candidate("のカスタムアプリ開拓。", 1.0),
+            ),
+            (
+                candidate("別の行の説明文", 1.0),
+                candidate("別の行の説明文", 1.0),
+            ),
+        ] {
+            assert!(retry_consensus("のカスタムアプリ開。", 0.5, &a, &b).is_none());
+        }
+        assert!(
+            retry_consensus(
+                "Unlwerk",
+                0.5,
+                &candidate("Unlimited", 1.0),
+                &candidate("Unlimited", 1.0)
+            )
+            .is_none()
+        );
     }
 
     #[test]

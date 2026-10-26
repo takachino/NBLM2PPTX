@@ -14,3 +14,4 @@ n2p-layout = { path = "../n2p-layout" }
 n2p-ooxml = { path = "../n2p-ooxml" }
 image.workspace = true
 serde.workspace = true
+ab_glyph.workspace = true

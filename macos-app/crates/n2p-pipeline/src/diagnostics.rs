@@ -116,6 +116,8 @@ pub(crate) fn save_ocr(
                     "corners_norm": observation.corners_norm,
                     "candidates": observation.candidates.iter().map(|c| json!({"text": c.text, "confidence": c.confidence})).collect::<Vec<_>>(),
                     "refinement": observation.refinement.as_ref().map(|r| json!({"original_text": r.original_text, "reason": r.reason})),
+                    "retry_candidates": observation.retry_candidates.iter().map(|c| json!({"text": c.text, "confidence": c.confidence})).collect::<Vec<_>>(),
+                    "retry_outcome": observation.retry_outcome,
                     "accepted": observation.confidence >= config.min_confidence
                         && !observation.text.trim().is_empty(),
                 })).collect::<Vec<_>>(),

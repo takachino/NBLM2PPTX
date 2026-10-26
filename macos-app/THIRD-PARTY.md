@@ -20,6 +20,12 @@ NBLM2PPTX for macOS（本目錄）採 MIT 授權（見 repo 根目錄 `LICENSE`�
   唯一的修改：移除私有 API `CGSSetWindowBackgroundBlurRadius` 的宣告與呼叫（Mac App Store 審核會拒絕），
   修改處以 `n2p:` 註解標示（`src/platform_impl/macos/ffi.rs`、`window_delegate.rs`）。
 
+## 字形の比較に使用するライブラリ
+
+- `ab_glyph` 0.2.32: <https://github.com/alexheretic/ab-glyph>、Apache-2.0 または MIT。
+- インストール済みフォントの字形をローカルで描画し、原稿の筆画と比較するために使用する。
+  OS やアプリに付属するフォントファイルは読み取りのみで、ソースや生成 PPTX へ埋め込まない。
+
 ## 執行期下載的模型（不隨原始碼或 app 散布）
 
 | 模型 | 下載來源 | 授權 |

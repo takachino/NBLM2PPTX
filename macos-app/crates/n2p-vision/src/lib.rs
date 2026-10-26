@@ -53,6 +53,8 @@ pub struct Observation {
     pub corners_norm: Option<[(f64, f64); 4]>,
     pub candidates: Vec<TextCandidate>,
     pub refinement: Option<TextRefinement>,
+    pub retry_candidates: Vec<TextCandidate>,
+    pub retry_outcome: Option<&'static str>,
 }
 
 /// 預設支援的 OCR 辨識語言（對應本專案支援的六種語言）。
@@ -512,6 +514,8 @@ mod tests {
             corners_norm: None,
             candidates: Vec::new(),
             refinement: None,
+            retry_candidates: Vec::new(),
+            retry_outcome: None,
         }
     }
 

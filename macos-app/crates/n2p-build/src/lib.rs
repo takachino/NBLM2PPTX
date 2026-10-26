@@ -25,6 +25,7 @@ pub mod diagnostics;
 pub mod fonts;
 pub mod fontsize;
 mod protection;
+mod typography;
 
 pub use protection::{PreservationReason, PreservedText};
 
@@ -311,6 +312,7 @@ pub fn build_deck_with_diagnostics(
         pages: Vec::with_capacity(inputs.len()),
         slide_size,
     };
+    let typography = typography::FontCatalog::load(&latin, options.font_name == AUTO_FONT);
 
     for (index, input) in inputs.iter().enumerate() {
         if !progress(index) {
@@ -328,6 +330,7 @@ pub fn build_deck_with_diagnostics(
             options,
             east_asian.as_deref(),
             &latin,
+            &typography,
             diagnostics.as_mut(),
         )?;
         if let (Some(sink), Some(diagnostics)) = (&mut sink, &diagnostics) {
@@ -349,6 +352,7 @@ fn build_page(
     options: &BuildOptions,
     east_asian_font: Option<&str>,
     latin_font: &str,
+    typography: &typography::FontCatalog,
     mut diagnostics: Option<&mut PageDiagnostics>,
 ) -> Result<PageReport> {
     let layout = input.layout;
@@ -468,7 +472,37 @@ fn build_page(
         } else {
             vec![text_box]
         };
-        for text_box in boxes {
+        let split = boxes.len() > 1;
+        for (line_index, mut text_box) in boxes.into_iter().enumerate() {
+            let source = if split {
+                block.lines[line_index].bbox.unwrap_or(text_region)
+            } else {
+                text_region
+            };
+            let continuation = if split {
+                block
+                    .lines
+                    .get(line_index + 1)
+                    .and_then(|line| line.bbox.map(|bbox| (line.text(), bbox.scale(image_scale))))
+            } else {
+                None
+            };
+            let confidence = block
+                .lines
+                .get(if split { line_index } else { 0 })
+                .and_then(|line| line.confidence_milli);
+            if confidence.is_none_or(|value| value >= 800) {
+                typography.apply(
+                    &mut text_box,
+                    input.image,
+                    source.scale(image_scale),
+                    scale,
+                    image_scale,
+                    continuation
+                        .as_ref()
+                        .map(|(text, bbox)| (text.as_str(), *bbox)),
+                );
+            }
             let text_box = if options.text_mode == TextMode::Overlay {
                 // 疊加式：文字全透明，背景不動
                 text_box.text_alpha(0)
@@ -502,6 +536,13 @@ fn build_page(
                         font_size_pt: text_box.font_size_pt,
                         bold: text_box.bold,
                         color: text_box.color_rgb,
+                        latin_font: text_box.font_family.clone(),
+                        east_asian_font: text_box.east_asian_font_family.clone(),
+                        emphasis_runs: text_box
+                            .styled_runs
+                            .iter()
+                            .map(|r| (r.text.clone(), r.bold))
+                            .collect(),
                     });
             }
         }

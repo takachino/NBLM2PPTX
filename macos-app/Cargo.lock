@@ -2212,6 +2212,7 @@ dependencies = [
 name = "n2p-build"
 version = "0.1.1"
 dependencies = [
+ "ab_glyph",
  "image",
  "n2p-core",
  "n2p-image",
@@ -2343,6 +2344,7 @@ dependencies = [
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
  "objc2-vision",
+ "strsim",
  "thiserror 2.0.21",
 ]
 

@@ -89,7 +89,108 @@ pub fn recognize_png(png: &[u8], config: &VisionConfig) -> Result<Vec<Observatio
         });
         observation.text = retry.text.clone();
     }
+    if config.accurate {
+        refine_low_confidence(&image, &mut observations, config);
+    }
     Ok(observations)
+}
+
+fn refine_low_confidence(
+    image: &RgbImage,
+    observations: &mut [Observation],
+    config: &VisionConfig,
+) {
+    let mut targets: Vec<usize> = observations
+        .iter()
+        .enumerate()
+        .filter(|(_, o)| {
+            o.confidence >= config.min_confidence
+                && o.confidence < 0.8
+                && o.text.chars().count() >= 3
+                && o.text.chars().any(char::is_alphabetic)
+                && o.bbox_norm.3 >= 0.018
+                && !o
+                    .corners_norm
+                    .is_some_and(|[tl, tr, _, _]| (tr.1 - tl.1).abs() > o.bbox_norm.3 * 0.1)
+        })
+        .map(|(i, _)| i)
+        .collect();
+    targets.sort_by(|a, b| {
+        observations[*a]
+            .confidence
+            .total_cmp(&observations[*b].confidence)
+            .then_with(|| {
+                observations[*b]
+                    .bbox_norm
+                    .3
+                    .total_cmp(&observations[*a].bbox_norm.3)
+            })
+    });
+    for index in targets.into_iter().take(12) {
+        let o = &mut observations[index];
+        let (x, y, w, h) = o.bbox_norm;
+        let pad = h * image.height as f64;
+        let bounds = BBox::new(
+            (x * image.width as f64 - pad * 0.35).floor() as i64,
+            (y * image.height as f64 - pad * 0.1).floor() as i64,
+            ((x + w) * image.width as f64 + pad * 0.35).floor() as i64,
+            ((y + h) * image.height as f64 + pad * 0.1).floor() as i64,
+        )
+        .clamp(image.width as i64, image.height as i64);
+        let crop = image.crop(bounds);
+        if crop.width == 0 || crop.height == 0 {
+            continue;
+        }
+        let mut retries = Vec::new();
+        for factor in [2, 3] {
+            let mut enlarged = RgbImage::new(crop.width * factor, crop.height * factor);
+            for cy in 0..enlarged.height {
+                for cx in 0..enlarged.width {
+                    enlarged.set_pixel(cx, cy, crop.pixel(cx / factor, cy / factor));
+                }
+            }
+            let result = enlarged
+                .to_png()
+                .ok()
+                .and_then(|bytes| recognize_raw(&bytes, config, None).ok());
+            let Some(rows) = result else {
+                o.retry_outcome = Some("recognition-failed");
+                break;
+            };
+            if rows.len() != 1 {
+                o.retry_outcome = Some("line-split-or-neighbour");
+                break;
+            }
+            let row = &rows[0];
+            let expected_y =
+                (y * image.height as f64 - bounds.top as f64 + pad / 2.0) / crop.height as f64;
+            let actual_y = row.bbox_norm.1 + row.bbox_norm.3 / 2.0;
+            if (expected_y - actual_y).abs() > pad / crop.height as f64 * 0.3 {
+                o.retry_outcome = Some("different-line-position");
+                break;
+            }
+            retries.push(TextCandidate {
+                text: row.text.clone(),
+                confidence: row.confidence,
+            });
+        }
+        if retries.len() == 2 {
+            if let Some(candidate) =
+                refinement::retry_consensus(&o.text, o.confidence, &retries[0], &retries[1])
+            {
+                o.refinement = Some(TextRefinement {
+                    original_text: o.text.clone(),
+                    reason: "multiscale-line-consensus",
+                });
+                o.text = candidate.text;
+                o.confidence = candidate.confidence;
+                o.retry_outcome = Some("accepted-consensus");
+            } else {
+                o.retry_outcome = Some("uncertain-or-disagreeing");
+            }
+        }
+        o.retry_candidates = retries;
+    }
 }
 
 fn recognize_raw(
@@ -243,6 +344,8 @@ fn recognize_raw(
             ]),
             candidates,
             refinement,
+            retry_candidates: Vec::new(),
+            retry_outcome: None,
         });
     }
 
