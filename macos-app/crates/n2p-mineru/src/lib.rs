@@ -174,6 +174,7 @@ fn parse_block(item: &Value) -> Result<Block> {
             lines.push(Line {
                 spans,
                 bbox: line.get("bbox").and_then(|v| parse_bbox(v).ok()),
+                ..Default::default()
             });
         }
     }
