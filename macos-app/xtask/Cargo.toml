@@ -17,5 +17,6 @@ clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 n2p-core = { path = "../crates/n2p-core" }
+n2p-ooxml = { path = "../crates/n2p-ooxml" }
 n2p-pdf = { path = "../crates/n2p-pdf" }
 n2p-pipeline = { path = "../crates/n2p-pipeline" }

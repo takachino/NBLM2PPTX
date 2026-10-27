@@ -5129,6 +5129,7 @@ dependencies = [
  "anyhow",
  "clap",
  "n2p-core",
+ "n2p-ooxml",
  "n2p-pdf",
  "n2p-pipeline",
  "serde",

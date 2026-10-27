@@ -26,6 +26,14 @@ NBLM2PPTX for macOS（本目錄）採 MIT 授權（見 repo 根目錄 `LICENSE`�
 - インストール済みフォントの字形をローカルで描画し、原稿の筆画と比較するために使用する。
   OS やアプリに付属するフォントファイルは読み取りのみで、ソースや生成 PPTX へ埋め込まない。
 
+## 比較資料を作る開発用ライブラリ
+
+- Pillow 13.0.0: [公式サイトのライセンス説明](https://pillow.readthedocs.io/en/stable/about.html#license)、MIT-CMU。
+- `scripts/full_page_review.py` と `scripts/quality_eval_example.py` が、PNG の拡縮、結合、ラベルの描画に使用する。
+  PEP 723 で版を固定し、`uv run` の隔離環境へ解決する。アプリには同梱しない。
+- 比較に使用するインストール済みフォントは読み取りのみで、フォントファイルの原本は同梱しない。
+  LibreOffice の描画用 PDF に埋め込まれるサブセットは、実資料と一緒にローカル保存する。
+
 ## 執行期下載的模型（不隨原始碼或 app 散布）
 
 | 模型 | 下載來源 | 授權 |
