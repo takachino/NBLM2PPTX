@@ -143,7 +143,7 @@ fn append_one_slide(
 ) -> Result<AppendOutcome> {
     if source.slide_count()? <= source_index {
         return Err(Error::UnexpectedStructure(format!(
-            "來源簡報沒有第 {source_index} 頁（共 {} 頁）",
+            "Source presentation has no slide at index {source_index} ({} slides)",
             source.slide_count()?
         )));
     }
@@ -172,13 +172,15 @@ fn append_one_slide(
                 .get(&src_layout_part)
                 .cloned()
                 .ok_or_else(|| {
-                    Error::UnexpectedStructure(format!("匯入設計組後找不到 {src_layout_part}"))
+                    Error::UnexpectedStructure(format!(
+                        "Cannot find {src_layout_part} after importing the design"
+                    ))
                 })?;
             (target, false)
         }
         None => {
             return Err(Error::UnexpectedStructure(format!(
-                "來源 {src_part} 的版面配置與基底不同，且已停用設計組匯入"
+                "Source {src_part} has a different layout from the base and design import is disabled"
             )));
         }
     };
@@ -212,7 +214,9 @@ fn append_one_slide(
                 .unwrap_or("png")
                 .to_ascii_lowercase();
             let content_type = image_content_type(&extension).ok_or_else(|| {
-                Error::OutOfRange(format!("來源 media part 副檔名無法辨識：{media_part}"))
+                Error::OutOfRange(format!(
+                    "Unrecognized source media part extension: {media_part}"
+                ))
             })?;
 
             let new_media = base.package().alloc_media_part(&extension);
@@ -419,7 +423,7 @@ pub fn merge_files(
     let mut iter = decks.into_iter();
     let mut base = iter
         .next()
-        .ok_or_else(|| Error::OutOfRange("至少要提供一個輸入檔".into()))?;
+        .ok_or_else(|| Error::OutOfRange("At least one input file is required".into()))?;
     let sources: Vec<Deck> = iter.collect();
     let report = merge_sources(&mut base, &sources, options)?;
     base.save(out)?;

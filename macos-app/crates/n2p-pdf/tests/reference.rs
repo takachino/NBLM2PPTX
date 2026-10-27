@@ -144,5 +144,5 @@ fn invalid_dpi_is_rejected() {
 fn out_of_range_page_is_rejected() {
     let doc = PdfDoc::open(pdf_path()).unwrap();
     let error = doc.page_size_pt(9).unwrap_err().to_string();
-    assert!(error.contains("超出範圍"), "實際：{error}");
+    assert!(error.contains("out of range"), "Actual: {error}");
 }

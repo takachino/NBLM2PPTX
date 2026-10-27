@@ -23,31 +23,31 @@ use n2p_vision::{VisionConfig, VisionDocument};
 /// 錯誤型別。
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("PDF 處理失敗：{0}")]
+    #[error("PDF processing failed: {0}")]
     Pdf(#[from] n2p_pdf::Error),
 
-    #[error("影像處理失敗：{0}")]
+    #[error("Image processing failed: {0}")]
     Image(String),
 
-    #[error("版面解析失敗：{0}")]
+    #[error("Layout parsing failed: {0}")]
     Layout(String),
 
-    #[error("PPTX 產生失敗：{0}")]
+    #[error("PPTX generation failed: {0}")]
     Build(#[from] n2p_build::Error),
 
-    #[error("OOXML 操作失敗：{0}")]
+    #[error("OOXML operation failed: {0}")]
     Ooxml(#[from] n2p_ooxml::Error),
 
-    #[error("版面模型錯誤：{0}")]
+    #[error("Layout model error: {0}")]
     LayoutModel(#[from] n2p_layout::Error),
 
-    #[error("I/O 失敗：{0}")]
+    #[error("I/O failed: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("設定錯誤：{0}")]
+    #[error("Configuration error: {0}")]
     Config(String),
 
-    #[error("已取消")]
+    #[error("Cancelled")]
     Cancelled,
 }
 
@@ -149,7 +149,7 @@ pub fn convert_with_progress(
 ) -> Result<ConvertReport> {
     if options.dpi <= 0.0 {
         return Err(Error::Config(format!(
-            "DPI 必須大於 0，實際 {}",
+            "DPI must be greater than 0, got {}",
             options.dpi
         )));
     }
@@ -157,7 +157,7 @@ pub fn convert_with_progress(
     let doc = n2p_pdf::PdfDoc::open(pdf_path)?;
     let total = doc.page_count();
     if total == 0 {
-        return Err(Error::Config("PDF 沒有任何頁面".into()));
+        return Err(Error::Config("PDF has no pages".into()));
     }
 
     // ── 1. 點陣化 + 去水印 ────────────────────────────────────────────────
@@ -170,7 +170,9 @@ pub fn convert_with_progress(
                 .collect();
             kept.sort_unstable();
             if kept.is_empty() {
-                return Err(Error::Config(format!("指定的頁碼都不在 1..={total} 之內")));
+                return Err(Error::Config(format!(
+                    "None of the selected pages are within 1..={total}"
+                )));
             }
             kept
         }
@@ -329,7 +331,7 @@ pub fn release_models() {
 
 /// 解析 `1-3,5` 這種頁碼範圍（1 起算）。
 pub fn parse_page_range(text: &str) -> Result<Vec<usize>> {
-    let bad = |part: &str| Error::Config(format!("頁碼範圍不合法：{part}"));
+    let bad = |part: &str| Error::Config(format!("Invalid page range: {part}"));
     let mut pages = Vec::new();
     for part in text.split(',') {
         let part = part.trim();
@@ -348,14 +350,14 @@ pub fn parse_page_range(text: &str) -> Result<Vec<usize>> {
             None => {
                 let page: usize = part.parse().map_err(|_| bad(part))?;
                 if page == 0 {
-                    return Err(Error::Config(format!("頁碼從 1 開始：{part}")));
+                    return Err(Error::Config(format!("Page numbers start at 1: {part}")));
                 }
                 pages.push(page);
             }
         }
     }
     if pages.is_empty() {
-        return Err(Error::Config("頁碼範圍是空的".into()));
+        return Err(Error::Config("Page range is empty".into()));
     }
     Ok(pages)
 }
@@ -410,7 +412,7 @@ fn resolve_layout(
             let document = MineruDocument::open(path).map_err(|e| Error::Layout(e.to_string()))?;
             if document.page_count() < total {
                 return Err(Error::Layout(format!(
-                    "JSON 只有 {} 頁，PDF 有 {total} 頁",
+                    "JSON has only {} pages, but the PDF has {total} pages",
                     document.page_count()
                 )));
             }

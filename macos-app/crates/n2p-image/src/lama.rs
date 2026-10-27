@@ -50,18 +50,18 @@ pub const MODEL_SIZE: u64 = 208_044_816;
 #[derive(Debug, thiserror::Error)]
 pub enum LamaError {
     #[error(
-        "找不到 LaMa 模型：{0}（可執行 `n2p models fetch` 下載，或用 N2P_LAMA_MODEL 指定路徑）"
+        "LaMa model not found: {0} (run `n2p models fetch` to download, or set N2P_LAMA_MODEL)"
     )]
     Missing(PathBuf),
-    #[error("模型檔案不完整：{path}（{actual} / {expected} 位元組），請重新下載")]
+    #[error("Incomplete model file: {path} ({actual} / {expected} bytes); download it again")]
     Truncated {
         path: PathBuf,
         actual: u64,
         expected: u64,
     },
-    #[error("ONNX Runtime 錯誤：{0}")]
+    #[error("ONNX Runtime error: {0}")]
     Runtime(String),
-    #[error("推論輸出格式不符預期：{0}")]
+    #[error("Unexpected inference output format: {0}")]
     Output(String),
 }
 
@@ -142,7 +142,9 @@ fn session_builder() -> Result<SessionBuilder, LamaError> {
 /// 在 GPU 上載入轉換後的模型（必要時先轉換）。
 fn load_gpu(original: &Path) -> Result<Session, LamaError> {
     if !cfg!(target_os = "macos") {
-        return Err(LamaError::Runtime("GPU 推論只支援 macOS".into()));
+        return Err(LamaError::Runtime(
+            "GPU inference is only supported on macOS".into(),
+        ));
     }
     let converted = crate::gpu::ensure_converted(original).map_err(LamaError::Runtime)?;
     let cache = crate::gpu::compile_cache_dir(original);
@@ -195,7 +197,7 @@ impl Lama {
                     });
                 }
                 Err(error) if request == DeviceRequest::Gpu => return Err(error),
-                Err(error) => eprintln!("  ! LaMa 無法使用 GPU（{error}），改用 CPU"),
+                Err(error) => eprintln!("Warning: LaMa GPU unavailable ({error}); using CPU"),
             }
         }
         let session = session_builder()?.commit_from_file(path)?;

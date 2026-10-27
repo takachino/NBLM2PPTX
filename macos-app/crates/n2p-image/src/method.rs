@@ -1,7 +1,7 @@
 //! 修補方法的識別碼與中繼資料。
 //!
-//! `id` 與顯示名稱刻意與 Python 版 `INPAINT_METHODS` **完全一致**，
-//! 這樣既有的 `config.json` 不需要遷移。
+//! Stable IDs and legacy Chinese names match Python's `INPAINT_METHODS`, so
+//! existing configuration and command arguments continue to work.
 
 use serde::{Deserialize, Serialize};
 
@@ -43,8 +43,47 @@ impl InpaintMethod {
         }
     }
 
-    /// 顯示名稱（與 `INPAINT_METHODS` 的 `name` 相同，供 UI 使用）。
+    /// English display name. Localized GUI labels are provided by the GUI.
     pub fn display_name(self) -> &'static str {
+        match self {
+            Self::BackgroundSmooth => "Smart smoothing (recommended)",
+            Self::EdgeMeanSmooth => "Edge mean fill",
+            Self::Background => "Fast solid fill",
+            Self::Onion => "Onion inpainting",
+            Self::Idw => "Gradient interpolation",
+            Self::Harmonic => "Harmonic inpainting",
+            Self::NearestNeighbour => "Nearest neighbour fill",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::BackgroundSmooth => {
+                "Best overall results for most text and watermark removal tasks"
+            }
+            Self::EdgeMeanSmooth => {
+                "Fills with the mean surrounding color; suitable for solid or simple backgrounds"
+            }
+            Self::Background => {
+                "Fills with a single background color; fastest, for very simple backgrounds only"
+            }
+            Self::Onion => {
+                "Repairs layer by layer from the outside in; suitable for thin scratches or lines"
+            }
+            Self::Idw => {
+                "Approximates surface transitions with inverse distance weighting; suitable for gradients"
+            }
+            Self::Harmonic => {
+                "Approximates biharmonic inpainting with harmonic interpolation; slower, with smoother shading"
+            }
+            Self::NearestNeighbour => {
+                "Seeds each pixel from its nearest unmasked neighbour, then smooths; suitable for text across color bands"
+            }
+        }
+    }
+
+    /// Original Python display names accepted for argument compatibility.
+    fn legacy_name(self) -> &'static str {
         match self {
             Self::BackgroundSmooth => "智慧平滑（推薦）",
             Self::EdgeMeanSmooth => "邊緣均值填充",
@@ -53,18 +92,6 @@ impl InpaintMethod {
             Self::Idw => "漸變過渡插值",
             Self::Harmonic => "雙調和光影修補",
             Self::NearestNeighbour => "最近鄰接填充",
-        }
-    }
-
-    pub fn description(self) -> &'static str {
-        match self {
-            Self::BackgroundSmooth => "綜合效果最佳，適合大多數去除文字、水印的場景",
-            Self::EdgeMeanSmooth => "取周圍像素平均色填充，適合純色或簡單背景",
-            Self::Background => "直接填充單一背景色，僅適合極簡底色，速度最快",
-            Self::Onion => "由外向內逐層修補，適合細長划痕或線條修復",
-            Self::Idw => "以反距離加權近似曲面過渡，適合帶漸變的背景",
-            Self::Harmonic => "以調和插值近似雙調和求解，較慢但光影較連續",
-            Self::NearestNeighbour => "逐像素取最近的未遮罩像素當種子再平滑，適合色帶交界的文字",
         }
     }
 
@@ -90,7 +117,7 @@ impl InpaintMethod {
         Self::all()
             .iter()
             .copied()
-            .find(|m| m.id() == value || m.display_name() == value)
+            .find(|m| m.id() == value || m.display_name() == value || m.legacy_name() == value)
     }
 
     pub fn all() -> &'static [InpaintMethod] {
@@ -141,6 +168,17 @@ mod tests {
             InpaintMethod::BackgroundSmooth
         );
         assert_eq!(InpaintMethod::try_parse("nope"), None);
+    }
+
+    #[test]
+    fn english_names_and_legacy_chinese_names_resolve_to_the_same_method() {
+        for &method in InpaintMethod::all() {
+            assert_eq!(
+                InpaintMethod::try_parse(method.display_name()),
+                Some(method)
+            );
+            assert_eq!(InpaintMethod::try_parse(method.legacy_name()), Some(method));
+        }
     }
 
     #[test]

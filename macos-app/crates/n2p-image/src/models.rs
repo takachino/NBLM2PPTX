@@ -67,48 +67,51 @@ impl ModelFile {
         });
         let status = command
             .status()
-            .map_err(|e| format!("無法執行 curl：{e}"))?;
+            .map_err(|e| format!("Failed to run curl: {e}"))?;
         if !status.success() {
-            return Err(format!("下載失敗（curl 結束碼 {:?}）", status.code()));
+            return Err(format!(
+                "Download failed (curl exit code {:?})",
+                status.code()
+            ));
         }
         match self.state() {
             ModelState::Ready => Ok(()),
             ModelState::Partial { size } => Err(format!(
-                "下載不完整（{size} / {} 位元組），請重試",
+                "Incomplete download ({size} / {} bytes); please retry",
                 self.expected_size
             )),
-            ModelState::Missing => Err("下載後找不到檔案".into()),
+            ModelState::Missing => Err("File not found after download".into()),
         }
     }
 }
 
 /// 全部模型（LaMa、SAM encoder、SAM decoder）。無法判斷快取目錄時回傳錯誤。
 pub fn manifest() -> Result<Vec<ModelFile>, String> {
-    let lama_path =
-        crate::lama::default_model_path().ok_or("無法判斷快取目錄（請設定 N2P_LAMA_MODEL）")?;
-    let sam_dir =
-        crate::sam::default_model_dir().ok_or("無法判斷快取目錄（請設定 N2P_SAM_DIR）")?;
+    let lama_path = crate::lama::default_model_path()
+        .ok_or("Cannot determine cache directory (set N2P_LAMA_MODEL)")?;
+    let sam_dir = crate::sam::default_model_dir()
+        .ok_or("Cannot determine cache directory (set N2P_SAM_DIR)")?;
     Ok(manifest_at(&lama_path, &sam_dir))
 }
 
 fn manifest_at(lama_path: &Path, sam_dir: &Path) -> Vec<ModelFile> {
     vec![
         ModelFile {
-            name: "LaMa 模型（去字修補，約 199 MiB）",
+            name: "LaMa model (text removal, about 199 MiB)",
             purpose: Purpose::Erase,
             path: lama_path.to_path_buf(),
             url: crate::lama::MODEL_URL,
             expected_size: crate::lama::MODEL_SIZE,
         },
         ModelFile {
-            name: "SAM encoder（物件切出，約 27 MiB）",
+            name: "SAM encoder (object extraction, about 27 MiB)",
             purpose: Purpose::Objects,
             path: sam_dir.join(crate::sam::ENCODER_FILE),
             url: crate::sam::ENCODER_URL,
             expected_size: crate::sam::ENCODER_SIZE,
         },
         ModelFile {
-            name: "SAM decoder（物件切出，約 16 MiB）",
+            name: "SAM decoder (object extraction, about 16 MiB)",
             purpose: Purpose::Objects,
             path: sam_dir.join(crate::sam::DECODER_FILE),
             url: crate::sam::DECODER_URL,

@@ -32,13 +32,13 @@ pub enum SourceKind {
 impl MineruDocument {
     pub fn from_json_str(text: &str) -> Result<Self> {
         let value: Value = serde_json::from_str(text)
-            .map_err(|e| Error::Malformed(format!("JSON 解析失敗：{e}")))?;
+            .map_err(|e| Error::Malformed(format!("JSON parsing failed: {e}")))?;
         Self::from_value(&value)
     }
 
     pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self> {
         let text = std::fs::read_to_string(path)
-            .map_err(|e| Error::Malformed(format!("讀取 JSON 失敗：{e}")))?;
+            .map_err(|e| Error::Malformed(format!("Failed to read JSON: {e}")))?;
         Self::from_json_str(&text)
     }
 
@@ -64,7 +64,7 @@ impl MineruDocument {
             });
         }
         Err(Error::Malformed(
-            "找不到 `pdf_info`（MinerU）或 `layoutParsingResults`（PaddleOCR）".into(),
+            "Missing `pdf_info` (MinerU) or `layoutParsingResults` (PaddleOCR)".into(),
         ))
     }
 
@@ -104,15 +104,15 @@ fn parse_mineru_page(value: &Value) -> Result<LayoutPage> {
     let size = value
         .get("page_size")
         .and_then(Value::as_array)
-        .ok_or_else(|| Error::Malformed("頁面缺少 page_size".into()))?;
+        .ok_or_else(|| Error::Malformed("Page is missing page_size".into()))?;
     let width = size
         .first()
         .and_then(Value::as_f64)
-        .ok_or_else(|| Error::Malformed("page_size[0] 不是數字".into()))?;
+        .ok_or_else(|| Error::Malformed("page_size[0] is not a number".into()))?;
     let height = size
         .get(1)
         .and_then(Value::as_f64)
-        .ok_or_else(|| Error::Malformed("page_size[1] 不是數字".into()))?;
+        .ok_or_else(|| Error::Malformed("page_size[1] is not a number".into()))?;
 
     let mut blocks = Vec::new();
     for key in ["para_blocks", "discarded_blocks"] {
@@ -143,7 +143,7 @@ fn parse_block(item: &Value) -> Result<Block> {
         .get("type")
         .or_else(|| item.get("block_label"))
         .and_then(Value::as_str)
-        .ok_or_else(|| Error::Malformed("區塊缺少 type / block_label".into()))?;
+        .ok_or_else(|| Error::Malformed("Block is missing type / block_label".into()))?;
     let kind = BlockKind::parse(label);
 
     let bbox_value = item.get("bbox").or_else(|| item.get("block_bbox"));
@@ -204,15 +204,15 @@ fn parse_block(item: &Value) -> Result<Block> {
 fn parse_paddle_page(value: &Value) -> Result<LayoutPage> {
     let pruned = value
         .get("prunedResult")
-        .ok_or_else(|| Error::Malformed("頁面缺少 prunedResult".into()))?;
+        .ok_or_else(|| Error::Malformed("Page is missing prunedResult".into()))?;
     let width = pruned
         .get("width")
         .and_then(Value::as_f64)
-        .ok_or_else(|| Error::Malformed("prunedResult 缺少 width".into()))?;
+        .ok_or_else(|| Error::Malformed("prunedResult is missing width".into()))?;
     let height = pruned
         .get("height")
         .and_then(Value::as_f64)
-        .ok_or_else(|| Error::Malformed("prunedResult 缺少 height".into()))?;
+        .ok_or_else(|| Error::Malformed("prunedResult is missing height".into()))?;
 
     let mut blocks = Vec::new();
     if let Some(list) = pruned.get("parsing_res_list").and_then(Value::as_array) {
@@ -229,10 +229,10 @@ fn parse_paddle_page(value: &Value) -> Result<LayoutPage> {
 fn parse_bbox(value: &Value) -> Result<BBox> {
     let array = value
         .as_array()
-        .ok_or_else(|| Error::Malformed("bbox 不是陣列".into()))?;
+        .ok_or_else(|| Error::Malformed("bbox is not an array".into()))?;
     if array.len() < 4 {
         return Err(Error::Malformed(format!(
-            "bbox 需要 4 個元素，實際 {}",
+            "bbox requires 4 elements, got {}",
             array.len()
         )));
     }
@@ -240,7 +240,7 @@ fn parse_bbox(value: &Value) -> Result<BBox> {
         array[index]
             .as_f64()
             .or_else(|| array[index].as_i64().map(|v| v as f64))
-            .ok_or_else(|| Error::Malformed(format!("bbox[{index}] 不是數字")))
+            .ok_or_else(|| Error::Malformed(format!("bbox[{index}] is not a number")))
     };
     Ok(BBox::new(
         number(0)?.floor() as i64,
