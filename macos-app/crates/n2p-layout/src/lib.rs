@@ -247,10 +247,10 @@ impl LayoutPage {
 /// 錯誤型別。
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("版面資料格式不正確：{0}")]
+    #[error("Malformed layout data: {0}")]
     Malformed(String),
 
-    #[error("頁索引 {index} 超出範圍（共 {count} 頁）")]
+    #[error("Page index {index} is out of range ({count} pages)")]
     PageOutOfRange { index: usize, count: usize },
 }
 

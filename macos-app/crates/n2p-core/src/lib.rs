@@ -17,19 +17,19 @@ pub struct RgbImage {
 /// 錯誤型別。
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("I/O 失敗：{0}")]
+    #[error("I/O failed: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("PNG 解碼失敗：{0}")]
+    #[error("PNG decoding failed: {0}")]
     Decode(String),
 
-    #[error("PNG 編碼失敗：{0}")]
+    #[error("PNG encoding failed: {0}")]
     Encode(String),
 
-    #[error("點陣圖長度不符：預期 {expected} bytes，實際 {actual}")]
+    #[error("Bitmap length mismatch: expected {expected} bytes, got {actual}")]
     LengthMismatch { expected: usize, actual: usize },
 
-    #[error("尺寸不合法：{0}")]
+    #[error("Invalid dimensions: {0}")]
     BadDimensions(String),
 }
 
@@ -125,7 +125,7 @@ impl RgbImage {
             .map_err(|e| Error::Decode(e.to_string()))?;
         let size = reader
             .output_buffer_size()
-            .ok_or_else(|| Error::Decode("PNG 太大，無法配置輸出緩衝".into()))?;
+            .ok_or_else(|| Error::Decode("PNG is too large to allocate an output buffer".into()))?;
         let mut buf = vec![0u8; size];
         let info = reader
             .next_frame(&mut buf)
@@ -149,7 +149,11 @@ impl RgbImage {
                 }
                 out
             }
-            other => return Err(Error::Decode(format!("不支援的 PNG 色彩型別：{other:?}"))),
+            other => {
+                return Err(Error::Decode(format!(
+                    "Unsupported PNG color type: {other:?}"
+                )));
+            }
         };
         Self::from_raw(width, height, rgb)
     }

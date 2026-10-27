@@ -70,7 +70,7 @@ pub fn ensure_converted(original: &Path) -> Result<PathBuf, String> {
     let partial = target.with_extension(format!("onnx.{}.partial", std::process::id()));
     let result = convert(original, &partial).and_then(|_| {
         std::fs::rename(&partial, &target)
-            .map_err(|e| format!("無法寫入 {}：{e}", target.display()))
+            .map_err(|e| format!("Failed to write {}: {e}", target.display()))
     });
     if result.is_err() {
         let _ = std::fs::remove_file(&partial);
@@ -80,10 +80,10 @@ pub fn ensure_converted(original: &Path) -> Result<PathBuf, String> {
 
 /// 把 `original` 改寫後寫到 `output`。
 pub fn convert(original: &Path, output: &Path) -> Result<RewriteStats, String> {
-    let bytes =
-        std::fs::read(original).map_err(|e| format!("無法讀取 {}：{e}", original.display()))?;
+    let bytes = std::fs::read(original)
+        .map_err(|e| format!("Failed to read {}: {e}", original.display()))?;
     let mut model =
-        ModelProto::parse_from_bytes(&bytes).map_err(|e| format!("模型解析失敗：{e}"))?;
+        ModelProto::parse_from_bytes(&bytes).map_err(|e| format!("Model parsing failed: {e}"))?;
     drop(bytes);
     fix_dim_param(&mut model, "batch", 1);
     let fixed = model.write_to_bytes().map_err(|e| e.to_string())?;
@@ -92,7 +92,8 @@ pub fn convert(original: &Path, output: &Path) -> Result<RewriteStats, String> {
     // ORT 只能把最佳化結果寫成檔案，所以借用輸出路徑當中繼
     {
         let environment = crate::runtime::environment()?;
-        let failed = |e: &dyn std::fmt::Display| format!("無法建立最佳化 session：{e}");
+        let failed =
+            |e: &dyn std::fmt::Display| format!("Failed to create optimization session: {e}");
         // ort 在 macOS 預設會自動掛上 CoreML，留下無法存檔的已編譯節點；摺疊必須純 CPU
         let mut builder = Session::builder(environment)
             .map_err(|e| failed(&e))?
@@ -105,17 +106,19 @@ pub fn convert(original: &Path, output: &Path) -> Result<RewriteStats, String> {
         // session 只是為了讓 ORT 存出最佳化後的圖，建完立刻丟掉
         builder
             .commit_from_memory(&fixed)
-            .map_err(|e| format!("常數摺疊失敗：{e}"))?;
+            .map_err(|e| format!("Constant folding failed: {e}"))?;
     }
     drop(fixed);
 
-    let folded = std::fs::read(output).map_err(|e| format!("讀不到最佳化結果：{e}"))?;
-    let mut model =
-        ModelProto::parse_from_bytes(&folded).map_err(|e| format!("最佳化結果解析失敗：{e}"))?;
+    let folded =
+        std::fs::read(output).map_err(|e| format!("Failed to read optimization result: {e}"))?;
+    let mut model = ModelProto::parse_from_bytes(&folded)
+        .map_err(|e| format!("Failed to parse optimization result: {e}"))?;
     drop(folded);
     let stats = rewrite_for_coreml(&mut model);
     let bytes = model.write_to_bytes().map_err(|e| e.to_string())?;
-    std::fs::write(output, bytes).map_err(|e| format!("無法寫入 {}：{e}", output.display()))?;
+    std::fs::write(output, bytes)
+        .map_err(|e| format!("Failed to write {}: {e}", output.display()))?;
     Ok(stats)
 }
 

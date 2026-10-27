@@ -236,7 +236,7 @@ fn recognize_raw(
 
     let results = request
         .results()
-        .ok_or_else(|| Error::Vision("Vision 沒有回傳結果".into()))?;
+        .ok_or_else(|| Error::Vision("Vision returned no results".into()))?;
 
     let mut observations = Vec::with_capacity(results.len());
     for index in 0..results.len() {

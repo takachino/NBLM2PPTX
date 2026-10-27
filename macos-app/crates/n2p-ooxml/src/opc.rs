@@ -361,7 +361,7 @@ impl Package {
     ) -> Result<String> {
         let extension = extension.trim_start_matches('.').to_ascii_lowercase();
         let content_type = image_content_type(&extension)
-            .ok_or_else(|| Error::OutOfRange(format!("不支援的影像格式：{extension}")))?;
+            .ok_or_else(|| Error::OutOfRange(format!("Unsupported image format: {extension}")))?;
 
         let image_part = self.alloc_media_part(&extension);
         self.set_part(image_part.clone(), data);

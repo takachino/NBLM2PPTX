@@ -160,16 +160,16 @@ impl Default for VisionConfig {
 /// 錯誤型別。
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("Vision 不支援此平台（僅 macOS）")]
+    #[error("Vision is not supported on this platform (macOS only)")]
     Unsupported,
 
-    #[error("Vision 執行失敗：{0}")]
+    #[error("Vision failed: {0}")]
     Vision(String),
 
-    #[error("編碼影像失敗：{0}")]
+    #[error("Image encoding failed: {0}")]
     Encode(String),
 
-    #[error("頁面尺寸與影像數量不符：{pages} vs {images}")]
+    #[error("Page size and image counts differ: {pages} vs {images}")]
     PageCountMismatch { pages: usize, images: usize },
 }
 

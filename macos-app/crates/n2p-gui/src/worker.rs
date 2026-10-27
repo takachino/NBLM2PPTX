@@ -113,7 +113,7 @@ pub fn fetch_models(events: Sender<Event>, lang: Language, wake: impl Fn() + Sen
             models.iter().try_for_each(|model| {
                 model
                     .fetch(false)
-                    .map_err(|e| format!("{}：{e}", model.name))
+                    .map_err(|e| format!("{}：{e}", lang.model_name(model)))
             })?;
             // 轉換失敗不算下載失敗：第一次載入時會再試，不行就用 CPU
             let _ = n2p_image::models::prepare_gpu(&models);

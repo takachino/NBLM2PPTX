@@ -269,7 +269,7 @@ fn disallowing_design_import_reports_the_mismatch() {
     let error = base.merge(&[source], &options).expect_err("應報錯");
     let message = error.to_string();
     assert!(
-        message.contains("版面配置與基底不同"),
+        message.contains("different layout from the base"),
         "錯誤訊息應指出原因，實際：{message}"
     );
 }

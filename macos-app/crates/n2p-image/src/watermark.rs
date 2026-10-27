@@ -39,7 +39,7 @@ pub const FLAT_BACKGROUND_THRESHOLD: f64 = 0.1;
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(
-        "影像長寬比與 NotebookLM 基準尺寸不符（{width}x{height}）：比例 {ratio:.4}，預期 {expected:.4}"
+        "Image aspect ratio differs from the NotebookLM reference ({width}x{height}): got {ratio:.4}, expected {expected:.4}"
     )]
     AspectMismatch {
         width: u32,
@@ -90,7 +90,7 @@ pub fn inpaint_region(image: &RgbImage, bbox: BBox, method: InpaintMethod) -> Rg
 
     let mask = Mask::from_bbox(image.width, image.height, bbox);
     match method {
-        InpaintMethod::Background => unreachable!("上面已處理"),
+        InpaintMethod::Background => unreachable!("already handled above"),
         InpaintMethod::BackgroundSmooth => inpaint::manual(image, &mask, fill_color, 100),
         InpaintMethod::EdgeMeanSmooth => {
             let average = edge_average_color(image, bbox);

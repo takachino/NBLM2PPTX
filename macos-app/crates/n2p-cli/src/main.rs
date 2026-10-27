@@ -13,7 +13,7 @@ use n2p_image::InpaintMethod;
 use n2p_pipeline::{ConvertOptions, LayoutSource};
 use n2p_vision::VisionConfig;
 
-/// notebooklm2ppt：把 PDF 轉成可編輯的 PowerPoint。
+/// notebooklm2ppt: Convert PDFs to editable PowerPoint presentations.
 #[derive(Debug, Parser)]
 #[command(name = "n2p", version, about, long_about = None)]
 struct Cli {
@@ -23,17 +23,17 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// 把 PDF 轉成可編輯的 PPTX
+    /// Convert a PDF to an editable PPTX
     Convert(ConvertArgs),
-    /// 顯示 PDF 的頁數與頁面尺寸
+    /// Show PDF page count and dimensions
     Info(InfoArgs),
-    /// 列出可用的去水印方法
+    /// List available watermark removal methods
     Methods,
-    /// 對單張影像跑 OCR，用於診斷版面結果
+    /// Run OCR on an image to diagnose layout results
     Ocr(OcrArgs),
-    /// 列出候選東亞字型與其安裝狀態
+    /// List candidate East Asian fonts and their installation status
     Fonts,
-    /// 管理可選的推論模型（LaMa 去字修補）
+    /// Manage optional inference models (LaMa text removal and SAM object extraction)
     Models(ModelsArgs),
 }
 
@@ -45,83 +45,83 @@ struct ModelsArgs {
 
 #[derive(Debug, Subcommand)]
 enum ModelsAction {
-    /// 下載 LaMa 模型到快取目錄（約 199 MiB，只需一次）
+    /// Download LaMa and SAM models to the cache (about 242 MiB total, once)
     Fetch,
-    /// 顯示模型狀態與路徑
+    /// Show model status and paths
     Status,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum TextModeArg {
-    /// 擦除式（預設）：先從背景擦掉原稿文字筆畫，再疊上文字框
+    /// Erase original text strokes from the background, then add text boxes (default)
     Erase,
-    /// 覆蓋式：背景不動，文字框自帶底色蓋住原稿文字
+    /// Keep the background and cover original text with filled text boxes
     Cover,
-    /// 疊加式：背景完全不動、文字全透明。視覺等於原稿，文字仍可選取編輯
+    /// Keep the background and add transparent, selectable and editable text
     Overlay,
 }
 
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
 enum EraseArg {
-    /// 有 LaMa 模型就用模型重建（品質最好），沒有就退回 `stroke`
+    /// Use LaMa when available (best quality), otherwise fall back to `stroke`
     #[default]
     Auto,
-    /// 只擦文字筆畫：子彈點、光暈、圖示不是文字色，完全不會被動到
+    /// Erase only text-colored strokes, preserving other colors such as bullets, halos and icons
     Stroke,
-    /// 用 LaMa 模型重建筆畫與其光暈底下的紋理（需先 `n2p models fetch`）
+    /// Use LaMa to reconstruct texture under strokes and halos (run `n2p models fetch` first)
     Lama,
-    /// 擦整個矩形並從四周插值：會連同區域內的圖示一起抹掉
+    /// Erase whole rectangles and interpolate from their surroundings, including any icons inside
     Inpaint,
-    /// 填單一顏色：與 Python 版等價
+    /// Fill with a single color, equivalent to the Python version
     Fill,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum LayoutArg {
-    /// 自動：macOS 用 Vision，其他平台退回 image
+    /// Use Vision on macOS, otherwise fall back to image-only output
     Auto,
     /// macOS Vision OCR
     Vision,
-    /// 不使用版面資訊（每頁一張滿版圖片）
+    /// Use no layout information (one full-slide image per page)
     Image,
-    /// 使用 MinerU／Paddle 的 JSON
+    /// Use MinerU / Paddle JSON
     Mineru,
 }
 
 #[derive(Debug, Args)]
 struct ConvertArgs {
-    /// 來源 PDF
+    /// Input PDF
     input: PathBuf,
 
-    /// 輸出 PPTX（預設與 PDF 同名）
+    /// Output PPTX (defaults to the PDF filename with a .pptx extension)
     #[arg(short, long)]
     output: Option<PathBuf>,
 
-    /// 點陣化 DPI
+    /// Rasterization DPI
     #[arg(long, default_value_t = 150.0)]
     dpi: f64,
 
-    /// 不去除 NotebookLM 水印
+    /// Keep the NotebookLM watermark
     #[arg(long)]
     no_inpaint: bool,
 
-    /// 去水印方法
+    /// Watermark removal method
     #[arg(long, value_name = "ID", default_value = "background_smooth")]
     method: String,
 
-    /// 把頁面調整成 16:9
+    /// Adjust pages to 16:9
     #[arg(long)]
     widescreen: bool,
 
-    /// 版面來源
+    /// Layout source
     #[arg(long, value_enum, default_value = "auto")]
     layout: LayoutArg,
 
-    /// MinerU／Paddle JSON（`--layout mineru` 時必填）
+    /// MinerU / Paddle JSON (required with `--layout mineru`)
     #[arg(long, value_name = "FILE")]
     mineru: Option<PathBuf>,
 
-    /// Vision 辨識語言，逗號分隔
+    /// Vision recognition languages, separated by commas
     #[arg(
         long,
         value_name = "LANGS",
@@ -129,57 +129,57 @@ struct ConvertArgs {
     )]
     lang: String,
 
-    /// 只處理指定頁，例如 `1-3,5`
+    /// Process only the specified pages, for example `1-3,5`
     #[arg(long, value_name = "RANGE")]
     pages: Option<String>,
 
-    /// 拉丁字型；`auto` 表示依內文自動挑選
+    /// Latin font; `auto` selects a font based on the text
     #[arg(long, default_value = "auto")]
     font: String,
 
-    /// 東亞字型（CJK 字元實際使用的字型）；預設自動挑選
+    /// East Asian font for CJK characters (selected automatically by default)
     #[arg(long, value_name = "NAME")]
     ea_font: Option<String>,
 
-    /// 讓 PowerPoint 自動縮放文字以塞入框內
+    /// Let PowerPoint resize text to fit its box
     #[arg(long)]
     autofit: bool,
 
-    /// 把背景上的獨立物件切成可移動的圖片（實驗性）。平坦底色免模型；
-    /// 攝影或漸層背景需先 `n2p models fetch` 取得 SAM 模型
+    /// Extract separate background objects as movable images (experimental). Flat backgrounds need no model;
+    /// photos or gradients require the SAM model from `n2p models fetch`
     #[arg(long)]
     extract_objects: bool,
 
-    /// 背景保留完整點陣化解析度（檔案較大但較清晰）
+    /// Keep the full rasterized background resolution (larger but clearer files)
     #[arg(long)]
     high_res_background: bool,
 
-    /// 背景擦除方式：`auto`（預設）有 LaMa 模型就用、否則只擦筆畫；
-    /// `lama` 強制用模型；`stroke` 只擦筆畫；`inpaint` 擦整個矩形；`fill` 填單色
+    /// Background erasure: `auto` (default) uses LaMa if available, otherwise erases strokes;
+    /// `lama` forces the model; `stroke` erases strokes; `inpaint` erases rectangles; `fill` uses a solid color
     #[arg(long, value_enum, default_value = "auto")]
     erase: EraseArg,
 
-    /// 文字合成方式：`cover` 不動背景、文字框自帶底色；`erase` 先擦背景再疊文字
+    /// Text composition: `erase` clears text before adding boxes; `cover` uses filled boxes; `overlay` adds transparent text
     #[arg(long, value_enum, default_value = "erase")]
     text_mode: TextModeArg,
 
-    /// 中間画像、OCR、文字消去マスク、背景補間の診断を保存するディレクトリ
+    /// Directory for intermediate images, OCR, text erasure masks and background interpolation diagnostics
     #[arg(long, value_name = "DIR")]
     work_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
 struct InfoArgs {
-    /// 來源 PDF
+    /// Input PDF
     input: PathBuf,
 }
 
 #[derive(Debug, Args)]
 struct OcrArgs {
-    /// 影像檔（PNG／JPEG）
+    /// Image file (PNG / JPEG)
     image: PathBuf,
 
-    /// 辨識語言，逗號分隔
+    /// Recognition languages, separated by commas
     #[arg(
         long,
         value_name = "LANGS",
@@ -193,7 +193,7 @@ fn main() -> ExitCode {
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("錯誤：{error}");
+            eprintln!("Error: {error}");
             ExitCode::FAILURE
         }
     }
@@ -224,21 +224,25 @@ fn models(args: ModelsArgs) -> anyhow::Result<()> {
             for model in &entries {
                 let name = model.name;
                 match model.state() {
-                    ModelState::Missing => println!("{name}：未下載（執行 `n2p models fetch`）"),
-                    ModelState::Ready => println!("{name}：已就緒"),
+                    ModelState::Missing => {
+                        println!("{name}: Not downloaded (run `n2p models fetch`)")
+                    }
+                    ModelState::Ready => println!("{name}: Ready"),
                     ModelState::Partial { size } => println!(
-                        "{name}：不完整（{size} / {} 位元組），請重新執行 `n2p models fetch`",
+                        "{name}: Incomplete ({size} / {} bytes); run `n2p models fetch` again",
                         model.expected_size
                     ),
                 }
-                println!("  路徑：{}", model.path.display());
-                println!("  來源：{}", model.url);
+                println!("  Path: {}", model.path.display());
+                println!("  Source: {}", model.url);
                 match model.gpu_converted() {
                     Some(true) => println!(
-                        "  GPU 版：已就緒（{}）",
+                        "  GPU version: Ready ({})",
                         n2p_image::gpu::converted_path(&model.path).display()
                     ),
-                    Some(false) => println!("  GPU 版：尚未產生（第一次使用時自動轉換，約 1 秒）"),
+                    Some(false) => println!(
+                        "  GPU version: Not generated (converted on first use, about 1 second)"
+                    ),
                     None => {}
                 }
             }
@@ -247,16 +251,16 @@ fn models(args: ModelsArgs) -> anyhow::Result<()> {
         ModelsAction::Fetch => {
             for model in &entries {
                 if model.state() == ModelState::Ready {
-                    println!("已存在，無需下載：{}", model.path.display());
+                    println!("Already downloaded: {}", model.path.display());
                     continue;
                 }
-                println!("下載 {} → {}", model.name, model.path.display());
+                println!("Downloading {} -> {}", model.name, model.path.display());
                 model.fetch(true).map_err(|e| anyhow::anyhow!(e))?;
-                println!("完成：{}", model.path.display());
+                println!("Done: {}", model.path.display());
             }
             // 轉換失敗不算下載失敗：第一次載入時會再試，不行就用 CPU
             if let Err(error) = n2p_image::models::prepare_gpu(&entries) {
-                eprintln!("警告：GPU 版 LaMa 轉換失敗（{error}），仍可用 CPU");
+                eprintln!("Warning: LaMa GPU conversion failed ({error}); CPU is still available");
             }
             Ok(())
         }
@@ -270,7 +274,10 @@ fn convert(args: ConvertArgs) -> anyhow::Result<()> {
         .unwrap_or_else(|| args.input.with_extension("pptx"));
 
     let method = InpaintMethod::try_parse(&args.method).ok_or_else(|| {
-        anyhow::anyhow!("未知的去水印方法 `{}`，可用值見 `n2p methods`", args.method)
+        anyhow::anyhow!(
+            "Unknown watermark removal method `{}`; see `n2p methods` for available values",
+            args.method
+        )
     })?;
 
     let layout = match args.layout {
@@ -281,7 +288,7 @@ fn convert(args: ConvertArgs) -> anyhow::Result<()> {
             let path = args
                 .mineru
                 .clone()
-                .ok_or_else(|| anyhow::anyhow!("`--layout mineru` 需要 `--mineru <FILE>`"))?;
+                .ok_or_else(|| anyhow::anyhow!("`--layout mineru` requires `--mineru <FILE>`"))?;
             LayoutSource::Mineru(path)
         }
     };
@@ -334,29 +341,29 @@ fn convert(args: ConvertArgs) -> anyhow::Result<()> {
         work_dir: args.work_dir.clone(),
     };
 
-    println!("來源：{}", args.input.display());
+    println!("Input: {}", args.input.display());
     let report = n2p_pipeline::convert(&args.input, &output, &options)?;
 
-    println!("輸出：{}", output.display());
-    println!("  頁數        {}", report.pages);
-    println!("  畫布        {:?}", report.slide_size);
-    println!("  版面來源    {}", report.layout_name);
-    println!("  文字框      {}", report.text_boxes);
-    println!("  圖片        {}", report.pictures);
-    println!("  去水印頁數  {}", report.watermarks_removed);
-    println!("  檔案大小    {} bytes", report.output_bytes);
+    println!("Output: {}", output.display());
+    println!("  Pages         {}", report.pages);
+    println!("  Canvas        {:?}", report.slide_size);
+    println!("  Layout        {}", report.layout_name);
+    println!("  Text boxes    {}", report.text_boxes);
+    println!("  Pictures      {}", report.pictures);
+    println!("  Cleaned pages {}", report.watermarks_removed);
+    println!("  File size     {} bytes", report.output_bytes);
     Ok(())
 }
 
 fn info(args: InfoArgs) -> anyhow::Result<()> {
     let doc = n2p_pdf::PdfDoc::open(&args.input)?;
     println!("{}", args.input.display());
-    println!("  頁數   {}", doc.page_count());
+    println!("  Pages   {}", doc.page_count());
     for index in 0..doc.page_count() {
         let (width, height) = doc.page_size_pt(index)?;
         let (px_w, px_h) = doc.pixel_size(index, 150.0)?;
         println!(
-            "  page {}  {width:.2} x {height:.2} pt（{:.1} x {:.1} in）→ {px_w} x {px_h} px @ 150 dpi",
+            "  page {}  {width:.2} x {height:.2} pt ({:.1} x {:.1} in) -> {px_w} x {px_h} px @ 150 dpi",
             index + 1,
             width / 72.0,
             height / 72.0
@@ -366,58 +373,55 @@ fn info(args: InfoArgs) -> anyhow::Result<()> {
 }
 
 fn methods() {
-    println!("可用去水印方法（`--method`）：");
+    println!("Available watermark removal methods (`--method`):");
     for method in InpaintMethod::all() {
         let note = if method.is_bit_exact_with_python() {
-            "與 Python 版逐位元相同"
+            "Bit-exact with the Python version"
         } else {
-            "替代演算法，視覺接近"
+            "Alternative algorithm with similar visual results"
         };
-        println!(
-            "  {:<18} {} —— {}",
-            method.id(),
-            method.display_name(),
-            note
-        );
+        println!("  {:<18} {} - {}", method.id(), method.display_name(), note);
         println!("  {:<18} {}", "", method.description());
     }
 }
 
 fn fonts() {
-    println!("候選東亞字型（依偏好排序，實際使用的是第一個已安裝者）：");
+    println!("Candidate East Asian fonts (in preference order; the first installed font is used):");
     let mut picked = false;
     for (family, installed) in n2p_build::fonts::availability() {
         let mark = if installed {
-            "✓ 已安裝"
+            "[installed]"
         } else {
-            "· 未安裝"
+            "[not installed]"
         };
         let tag = if installed && !picked {
             picked = true;
-            "  ← 將使用"
+            "  <- selected"
         } else {
             ""
         };
         println!("  {mark}  {family}{tag}");
     }
     if !picked {
-        println!("\n  找不到任何候選字型；<a:ea> 不會寫入，PowerPoint 會用主題字型。");
+        println!(
+            "\n  No candidate fonts found; <a:ea> will be omitted and PowerPoint will use the theme font."
+        );
     }
-    println!("\n可用 --font / --ea-font 指定其他字型。");
+    println!("\nUse --font / --ea-font to specify other fonts.");
 }
 
 fn ocr(args: OcrArgs) -> anyhow::Result<()> {
     let image = n2p_core::RgbImage::open(&args.image)?;
     let config = vision_config(&args.lang)?;
     println!(
-        "{}：{} x {}",
+        "{}: {} x {}",
         args.image.display(),
         image.width,
         image.height
     );
 
     let observations = n2p_vision::recognize(&image, &config)?;
-    println!("辨識 {} 筆：", observations.len());
+    println!("Recognized {} observations:", observations.len());
     for (index, observation) in observations.iter().enumerate() {
         let (x, y, w, h) = observation.bbox_norm;
         println!(
@@ -435,7 +439,9 @@ fn vision_config(langs: &str) -> anyhow::Result<VisionConfig> {
         .filter(|s| !s.is_empty())
         .collect();
     if languages.is_empty() {
-        return Err(anyhow::anyhow!("至少需要一個辨識語言"));
+        return Err(anyhow::anyhow!(
+            "At least one recognition language is required"
+        ));
     }
     Ok(VisionConfig {
         languages,

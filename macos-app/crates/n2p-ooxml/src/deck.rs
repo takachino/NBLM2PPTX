@@ -71,7 +71,7 @@ impl Deck {
         let mut out = Vec::new();
         for rid in pres::slide_rel_ids(&pres)? {
             let target = rels.target_of(&rid).ok_or_else(|| {
-                Error::UnexpectedStructure(format!("presentation.xml.rels 缺少 {rid}"))
+                Error::UnexpectedStructure(format!("presentation.xml.rels is missing {rid}"))
             })?;
             out.push(Package::resolve_target(PRESENTATION_PART, target));
         }
@@ -87,7 +87,7 @@ impl Deck {
         self.slide_parts()?
             .into_iter()
             .nth(index)
-            .ok_or_else(|| Error::OutOfRange(format!("投影片索引 {index} 超出範圍")))
+            .ok_or_else(|| Error::OutOfRange(format!("Slide index {index} is out of range")))
     }
 
     pub fn slide(&self, index: usize) -> Result<Document> {
@@ -116,9 +116,9 @@ impl Deck {
     pub fn slide_layout_part(&self, index: usize) -> Result<String> {
         let part = self.slide_part(index)?;
         let rels = self.package.rels(&part)?;
-        let rel = rels
-            .first_of_type(REL_TYPE_SLIDE_LAYOUT)
-            .ok_or_else(|| Error::UnexpectedStructure(format!("{part} 沒有 slideLayout 關聯")))?;
+        let rel = rels.first_of_type(REL_TYPE_SLIDE_LAYOUT).ok_or_else(|| {
+            Error::UnexpectedStructure(format!("{part} has no slideLayout relationship"))
+        })?;
         Ok(Package::resolve_target(&part, &rel.target))
     }
 
@@ -257,7 +257,7 @@ impl Deck {
         let count = self.slide_count()?;
         if keep >= count {
             return Err(Error::OutOfRange(format!(
-                "投影片索引 {keep} 超出範圍（共 {count} 頁）"
+                "Slide index {keep} is out of range ({count} slides)"
             )));
         }
         for index in (0..count).rev() {

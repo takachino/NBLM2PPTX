@@ -224,12 +224,15 @@ impl From<String> for Node {
 fn attrs_of(start: &BytesStart<'_>) -> Result<Vec<(String, String)>> {
     let mut out = Vec::new();
     for attr in start.attributes() {
-        let attr = attr.map_err(|e| Error::UnexpectedStructure(format!("屬性解析失敗：{e}")))?;
+        let attr =
+            attr.map_err(|e| Error::UnexpectedStructure(format!("Attribute parsing failed: {e}")))?;
         let key = attr.key.as_ref().to_owned();
         // `Attribute::value` 是原始未轉義字串，需自行解轉義（`&amp;` → `&`）。
         let value = attr
             .normalized_value(quick_xml::XmlVersion::Implicit1_0)
-            .map_err(|e| Error::UnexpectedStructure(format!("屬性 {key} 解轉義失敗：{e}")))?
+            .map_err(|e| {
+                Error::UnexpectedStructure(format!("Failed to unescape attribute {key}: {e}"))
+            })?
             .into_owned();
         out.push((key, value));
     }
@@ -280,12 +283,14 @@ pub fn parse(bytes: &[u8]) -> Result<Document> {
                 push_child(&mut stack, &mut root, Node::Element(el))?;
             }
             Event::End(_) => {
-                let el = stack
-                    .pop()
-                    .ok_or_else(|| Error::UnexpectedStructure("結束標籤多於開始標籤".into()))?;
+                let el = stack.pop().ok_or_else(|| {
+                    Error::UnexpectedStructure("More closing tags than opening tags".into())
+                })?;
                 if stack.is_empty() {
                     if root.is_some() {
-                        return Err(Error::UnexpectedStructure("文件有多個根元素".into()));
+                        return Err(Error::UnexpectedStructure(
+                            "Document has multiple root elements".into(),
+                        ));
                     }
                     root = Some(el);
                 } else {
@@ -320,7 +325,7 @@ pub fn parse(bytes: &[u8]) -> Result<Document> {
                             "apos" => "'",
                             other => {
                                 return Err(Error::UnexpectedStructure(format!(
-                                    "未知的 XML 實體參照：&{other};"
+                                    "Unknown XML entity reference: &{other};"
                                 )));
                             }
                         };
@@ -336,7 +341,8 @@ pub fn parse(bytes: &[u8]) -> Result<Document> {
         buf.clear();
     }
 
-    let root = root.ok_or_else(|| Error::UnexpectedStructure("文件沒有根元素".into()))?;
+    let root =
+        root.ok_or_else(|| Error::UnexpectedStructure("Document has no root element".into()))?;
     Ok(Document { declaration, root })
 }
 
@@ -379,7 +385,9 @@ fn push_child(stack: &mut [Element], root: &mut Option<Element>, node: Node) -> 
                 *root = Some(e);
                 Ok(())
             }
-            Node::Element(_) => Err(Error::UnexpectedStructure("文件有多個根元素".into())),
+            Node::Element(_) => Err(Error::UnexpectedStructure(
+                "Document has multiple root elements".into(),
+            )),
             // 根層級的文字／註解／空白（例如宣告後的換行）直接丟棄。
             _ => Ok(()),
         },

@@ -103,22 +103,22 @@ const FOREGROUND_EXPAND_PX: i64 = 2;
 /// 錯誤型別。
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("PPTX 操作失敗：{0}")]
+    #[error("PPTX operation failed: {0}")]
     Ooxml(#[from] n2p_ooxml::Error),
 
-    #[error("影像操作失敗：{0}")]
+    #[error("Image operation failed: {0}")]
     Image(String),
 
-    #[error("沒有可用的頁面")]
+    #[error("No pages available")]
     NoPages,
 
-    #[error("頁面尺寸不合法：{0}")]
+    #[error("Invalid page dimensions: {0}")]
     BadPageSize(String),
 
-    #[error("已取消")]
+    #[error("Cancelled")]
     Cancelled,
 
-    #[error("診断出力に失敗しました: {0}")]
+    #[error("Failed to write diagnostics: {0}")]
     Diagnostics(String),
 }
 
@@ -1490,7 +1490,7 @@ fn prepare_background(
             match n2p_image::Lama::load_default() {
                 Ok(engine) => **guard = Some(engine),
                 Err(error) => eprintln!(
-                    "  ! LaMa 不可用（{error}），改用插值修補；可執行 `n2p models fetch` 下載"
+                    "Warning: LaMa unavailable ({error}); using interpolation. Run `n2p models fetch` to download"
                 ),
             }
         }
@@ -1585,7 +1585,9 @@ fn prepare_background(
                         Some(engine) => {
                             method = "lama";
                             if let Err(error) = engine.inpaint_mask(&mut image, &mask) {
-                                eprintln!("  ! LaMa 修補失敗（{error}），改用插值");
+                                eprintln!(
+                                    "Warning: LaMa inpainting failed ({error}); using interpolation"
+                                );
                                 model_error = Some(error.to_string());
                                 method = "source-preserved-no-background";
                                 if let Some(background) = &background {
@@ -1715,7 +1717,7 @@ fn extract_objects(
                     static WARNED: std::sync::Once = std::sync::Once::new();
                     WARNED.call_once(|| {
                         eprintln!(
-                            "  ! SAM 不可用，非平坦背景的頁面不切物件；可執行 `n2p models fetch` 下載"
+                            "Warning: SAM unavailable; object extraction is skipped on non-flat backgrounds. Run `n2p models fetch` to download"
                         );
                     });
                     Vec::new()
@@ -1796,7 +1798,7 @@ fn extract_objects(
         }
         (None, Some(engine)) => {
             if let Err(error) = engine.inpaint_mask(image, &union) {
-                eprintln!("  ! LaMa 修補失敗（{error}），改用插值");
+                eprintln!("Warning: LaMa inpainting failed ({error}); using interpolation");
                 n2p_image::inpaint_mask_in_place(
                     image,
                     &union,
@@ -1902,7 +1904,7 @@ fn resize_to(image: &RgbImage, width: u32, height: u32) -> Result<RgbImage> {
         return Ok(image.clone());
     }
     let buffer = image::RgbImage::from_raw(image.width, image.height, image.data.clone())
-        .ok_or_else(|| Error::Image("無法建立影像緩衝".into()))?;
+        .ok_or_else(|| Error::Image("Failed to create image buffer".into()))?;
     let resized = image::imageops::resize(
         &buffer,
         width,

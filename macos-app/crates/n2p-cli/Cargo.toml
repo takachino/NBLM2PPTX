@@ -1,6 +1,6 @@
 [package]
 name = "n2p-cli"
-description = "notebooklm2ppt 的 macOS 命令列介面"
+description = "Command-line interface for converting NotebookLM PDFs to editable PPTX"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

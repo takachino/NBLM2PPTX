@@ -44,17 +44,17 @@ const LOW_RES: usize = 256;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SamError {
-    #[error("找不到 SAM 模型：{0}（執行 `n2p models fetch` 下載）")]
+    #[error("SAM model not found: {0} (run `n2p models fetch` to download)")]
     Missing(PathBuf),
-    #[error("SAM 模型不完整：{path}（{actual} / {expected} 位元組）")]
+    #[error("Incomplete SAM model: {path} ({actual} / {expected} bytes)")]
     Truncated {
         path: PathBuf,
         actual: u64,
         expected: u64,
     },
-    #[error("ONNX Runtime 錯誤：{0}")]
+    #[error("ONNX Runtime error: {0}")]
     Runtime(String),
-    #[error("SAM 輸出格式不符：{0}")]
+    #[error("Unexpected SAM output format: {0}")]
     Output(String),
 }
 

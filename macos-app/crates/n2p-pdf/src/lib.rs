@@ -18,19 +18,19 @@ const POINTS_PER_INCH: f64 = 72.0;
 /// 錯誤型別。
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("I/O 失敗：{0}")]
+    #[error("I/O failed: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("PDF 載入失敗：{0}")]
+    #[error("PDF loading failed: {0}")]
     Load(String),
 
-    #[error("頁索引 {index} 超出範圍（共 {count} 頁）")]
+    #[error("Page index {index} is out of range ({count} pages)")]
     PageOutOfRange { index: usize, count: usize },
 
-    #[error("PNG 編碼失敗：{0}")]
+    #[error("PNG encoding failed: {0}")]
     Encode(String),
 
-    #[error("點陣化失敗：{0}")]
+    #[error("Rasterization failed: {0}")]
     Render(String),
 }
 
@@ -88,7 +88,7 @@ impl PdfDoc {
     pub fn pixel_size(&self, index: usize, dpi: f64) -> Result<(u32, u32)> {
         let (w_pt, h_pt) = self.page_size_pt(index)?;
         if !dpi.is_finite() || dpi <= 0.0 {
-            return Err(Error::Render(format!("DPI 無效：{dpi}")));
+            return Err(Error::Render(format!("Invalid DPI: {dpi}")));
         }
         let factor = dpi / POINTS_PER_INCH;
         Ok(((w_pt * factor).ceil() as u32, (h_pt * factor).ceil() as u32))
@@ -102,7 +102,9 @@ impl PdfDoc {
         let (target_w, target_h) = self.pixel_size(index, dpi)?;
         let (w_pt, h_pt) = self.page_size_pt(index)?;
         if target_w == 0 || target_h == 0 {
-            return Err(Error::Render(format!("頁面尺寸無效：{w_pt} x {h_pt} pt")));
+            return Err(Error::Render(format!(
+                "Invalid page dimensions: {w_pt} x {h_pt} pt"
+            )));
         }
         // 由「目標像素」反推縮放，確保輸出尺寸與 MuPDF 逐像素對齊。
         //
@@ -131,7 +133,7 @@ impl PdfDoc {
         let expected = (width as usize) * (height as usize) * 4;
         if rgba.len() != expected {
             return Err(Error::Render(format!(
-                "點陣圖長度不符：{} vs {expected}",
+                "Bitmap length mismatch: {} vs {expected}",
                 rgba.len()
             )));
         }
@@ -218,7 +220,7 @@ impl PdfDoc {
 fn scale_for(base: f64, target: u32) -> Result<f32> {
     let base = base as f32;
     if base <= 0.0 {
-        return Err(Error::Render("頁面基準尺寸為 0".into()));
+        return Err(Error::Render("Page base dimension is zero".into()));
     }
     let mut scale = (target as f32 / base).max(f32::MIN_POSITIVE);
     // 最多推幾步就好；正常情況 0 或 1 步。
@@ -229,7 +231,7 @@ fn scale_for(base: f64, target: u32) -> Result<f32> {
         scale = scale.next_up();
     }
     Err(Error::Render(format!(
-        "無法把 {base} pt 對齊到 {target} px"
+        "Cannot align {base} pt to {target} px"
     )))
 }
 
