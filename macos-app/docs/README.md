@@ -1,5 +1,7 @@
 # Spire.Presentation 引擎解析產物
 
+旧版と最終版の実測値、条件、再実行手順は [変換の性能比較](conversion-performance.md) を参照。
+
 把 `spire.presentation 11.8.1` 黑箱的實際行為取出成可實作的規格，供 Rust 改寫使用。
 
 | 文件 | 內容 |

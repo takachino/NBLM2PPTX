@@ -1,5 +1,6 @@
 target/
 dist/
+__pycache__/
 # 憑證不進公開 repo
 *.p8
 *.provisionprofile
