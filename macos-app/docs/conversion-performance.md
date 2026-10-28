@@ -173,7 +173,7 @@ uv run --python 3.12 macos-app/scripts/summarize_conversion_benchmark.py \
 
 ```sh
 uv run --python 3.12 python -m unittest discover \
-  -s macos-app/scripts/tests -v
+  -s macos-app/scripts/tests -p '*conversion_benchmark.py' -v
 ```
 
 単体テストは、RSS の単位、プロセスごとの独立したピーク、終了コード、条件別の集計、失敗や欠測の除外、実行順、PPTX の内容変更の検出を扱う。
