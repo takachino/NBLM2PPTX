@@ -1,11 +1,12 @@
 //! `xtask` —— 開發用工具。
 //!
-//! 兩個子命令，對應兩種不同的問題：
+//! 互換性、画像差分、領域別の品質評価を扱う。
 //!
 //! | 子命令 | 後端 | 回答的問題 |
 //! | :--- | :--- | :--- |
 //! | `compat` | Microsoft PowerPoint（AppleScript） | PowerPoint 接受我們產生的 OOXML 嗎？內容讀回來對嗎？ |
 //! | `visual-diff` | LibreOffice（`soffice`） | 渲染出來看起來一樣嗎？ |
+//! | `quality-eval` | 保存した画像、OOXML、診断、実描画範囲 | 分類ごとの品質条件を満たすか？ |
 //!
 //! 兩者刻意分開，因為 **PowerPoint 的 AppleScript 沒有匯出 PDF 的命令**
 //! （只有 `save as picture` 與主題存檔），所以像素比對只能靠 LibreOffice。
@@ -13,6 +14,7 @@
 mod compare;
 mod manifest;
 mod powerpoint;
+mod quality;
 mod soffice;
 
 use std::path::{Path, PathBuf};
@@ -37,6 +39,13 @@ enum Command {
     Compat(CompatArgs),
     /// 用 LibreOffice 做像素級的視覺回歸
     VisualDiff(VisualDiffArgs),
+    /// Evaluate named quality regions from a JSON configuration
+    QualityEval {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        report: PathBuf,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -107,6 +116,7 @@ fn run(cli: Cli) -> Result<usize> {
         Command::Doctor => doctor(),
         Command::Compat(args) => compat(args),
         Command::VisualDiff(args) => visual_diff(args),
+        Command::QualityEval { config, report } => quality::run(&config, &report),
     }
 }
 
