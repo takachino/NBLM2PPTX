@@ -4,7 +4,7 @@
 対象: ローカルの `archive/plans/conversion-quality-followups.md` のタスク 3。
 プロジェクト規約の `archive/plan/` にも同じ計画を保存する。
 基準: `9d88e02`、統合先 `feat/multilingual-ja`。
-状態: 比較資料と評価器の実装、検証を完了。PR #7 のレビュー待ち。
+状態: 比較資料と評価器の実装、検証を完了。PR #7 を 2026-10-30 に `feat/multilingual-ja` へマージ済み (マージ `27ff412`)。
 
 ## 方針
 
@@ -73,5 +73,5 @@ Rust の xtask 全 30 テスト、Python の 3 テスト、整形、Clippy が�
 同じ設定で三者を再描画し、計 42 枚の画像の SHA-256 がすべて一致した (`reproducibility.json`)。
 合成例の正常系は終了コード 0、局所破損の例は終了コード 1 になることも確認した。
 
-レビュー用 PR: [#7](https://github.com/takachino/NBLM2PPTX/pull/7)。統合先は `feat/multilingual-ja`。マージは未実施。
+レビュー用 PR: [#7](https://github.com/takachino/NBLM2PPTX/pull/7)。統合先は `feat/multilingual-ja`。2026-10-30 にマージ済み (マージ `27ff412`)。
 実装コミットは `69dea4b`。実資料の出力と PPTX はローカル保存のまま保持した。
